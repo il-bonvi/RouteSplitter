@@ -200,7 +200,10 @@ input[type="file"] { display:none; }
 /* ═══════════════════════════════════════════════════════
    REPORT STAMPABILE — nascosto a schermo, visibile solo in stampa
    ═══════════════════════════════════════════════════════ */
-.report-view { display: none; }
+.report-view { display: none; width: 700px; margin: 0 auto; }
+.report-view.exporting { display:block !important; position:fixed; top:0; left:-10000px; background:#fff; padding:16px; z-index:-1; }
+.report-view #map { height:220px; width:100%; border-radius:10px; margin-bottom:14px; }
+.report-view .leaflet-control-container { display:none !important; }
 .report-header { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; border-bottom:2px solid #111827; padding-bottom:10px; margin-bottom:14px; }
 .report-header h1 { font-size:1.4rem; margin:0 0 4px 0; color:#111827; font-family:'Outfit',sans-serif; }
 .report-header .report-sub { font-size:0.8rem; color:#4b5563; }
@@ -211,11 +214,12 @@ input[type="file"] { display:none; }
 .report-stats .rs-value { font-weight:700; color:#111827; font-size:0.95rem; font-family:'JetBrains Mono',monospace; }
 #reportMap { margin-bottom: 14px; }
 #reportChart { margin-bottom:18px; }
-.report-table { width:100%; border-collapse:collapse; font-size:0.68rem; }
-.report-table th, .report-table td { border:1px solid #d1d5db; padding:4px 6px; text-align:center; }
-.report-table thead th { background:#f3f4f6; font-weight:700; color:#374151; }
+.report-table { width:100%; border-collapse:collapse; font-size:0.68rem; border:1.5px solid #6b7280; }
+.report-table th, .report-table td { border:1px solid #9ca3af; padding:5px 6px; text-align:center; }
+.report-table thead th { background:#e5e7eb; font-weight:700; color:#1f2937; border-bottom:2px solid #4b5563; }
+.report-table tbody tr { border-bottom:1.5px solid #6b7280; }
 .report-table td.rt-name { text-align:left; font-weight:600; }
-.report-table tfoot td { font-weight:700; background:#f9fafb; }
+.report-table tfoot td { font-weight:700; background:#f3f4f6; border-top:2px solid #4b5563; }
 .report-footer { margin-top:14px; font-size:0.65rem; color:#9ca3af; text-align:center; }
 
 @media print {
@@ -261,7 +265,7 @@ input[type="file"] { display:none; }
     <div class="section-title"><span class="dot" style="background:var(--accent)"></span>Mappa &amp; Planimetria</div>
 
     <div class="gara-zone">
-      <div class="panel">
+      <div class="panel" id="mapPanel">
         <div id="map"></div>
       </div>
 
@@ -754,7 +758,7 @@ document.getElementById('importSectionsInput').addEventListener('change', (e) =>
 function buildReportChart(container) {
   container.innerHTML = '';
   const pts = routeData.points;
-  const totalW = 900, totalH = 300;
+  const totalW = 900, totalH = 270;
   const margin = { top: 20, right: 20, bottom: 36, left: 55 };
   const W = totalW - margin.left - margin.right;
   const H = totalH - margin.top - margin.bottom;
@@ -859,67 +863,6 @@ function buildReportChart(container) {
   }
 }
 
-// Planimetria semplificata per il report: traccia colorata per pendenza (stesso schema
-// della mappa Leaflet) proiettata in 2D, senza tile esterne, così stampa sempre in modo affidabile.
-function buildReportMap(container) {
-  container.innerHTML = '';
-  const pts = routeData.points;
-  const totalW = 900, totalH = 340;
-  const margin = { top: 16, right: 16, bottom: 16, left: 16 };
-  const W = totalW - margin.left - margin.right;
-  const H = totalH - margin.top - margin.bottom;
-
-  const gradients = pts.map(p => p.gradient);
-  const distances = pts.map(p => p.dist);
-  const smoothed = smoothByDistance(gradients, distances, smoothingRadiusMeters());
-
-  const lats = pts.map(p => p.lat), lons = pts.map(p => p.lon);
-  const minLat = Math.min(...lats), maxLat = Math.max(...lats);
-  const minLon = Math.min(...lons), maxLon = Math.max(...lons);
-  const avgLatRad = ((minLat + maxLat) / 2) * Math.PI / 180;
-  const lonFactor = Math.cos(avgLatRad); // correzione di proiezione equirettangolare
-
-  const spanX = (maxLon - minLon) * lonFactor;
-  const spanY = (maxLat - minLat);
-  const scale = Math.min(spanX > 0 ? W / spanX : 1, spanY > 0 ? H / spanY : 1) * 0.92;
-  const offsetX = margin.left + (W - spanX * scale) / 2;
-  const offsetY = margin.top + (H - spanY * scale) / 2;
-
-  function project(lat, lon) {
-    const x = offsetX + (lon - minLon) * lonFactor * scale;
-    const y = offsetY + (maxLat - lat) * scale; // lat crescente verso l'alto → y decrescente
-    return [x, y];
-  }
-
-  const svg = d3.select(container).append('svg')
-    .attr('viewBox', `0 0 ${totalW} ${totalH}`)
-    .attr('preserveAspectRatio', 'xMidYMid meet')
-    .style('width', '100%').style('height', 'auto').style('display', 'block');
-
-  svg.append('rect').attr('x', 0).attr('y', 0).attr('width', totalW).attr('height', totalH).attr('fill', '#f8fafc').attr('stroke', '#e5e7eb');
-
-  const g = svg.append('g');
-
-  for (let i = 1; i < pts.length; i++) {
-    const p1 = pts[i - 1], p2 = pts[i];
-    const [x1, y1] = project(p1.lat, p1.lon);
-    const [x2, y2] = project(p2.lat, p2.lon);
-    const color = getGradientColor(smoothed[i]);
-    g.append('line').attr('x1', x1).attr('y1', y1).attr('x2', x2).attr('y2', y2)
-      .attr('stroke', color).attr('stroke-width', 4.5).attr('stroke-linecap', 'round');
-  }
-
-  // Punti di sezione numerati sulla planimetria
-  points.forEach((p, idx) => {
-    const ip = getInterpolatedPoint(p.distKm);
-    const [x, y] = project(ip.lat, ip.lon);
-    const color = markerColor(p.fixed);
-    const grp = g.append('g').attr('transform', `translate(${x},${y})`);
-    grp.append('circle').attr('r', 9).attr('fill', color).attr('stroke', '#fff').attr('stroke-width', 2);
-    grp.append('text').attr('y', 3.2).attr('text-anchor', 'middle').attr('font-size', '9.5px').attr('font-weight', '800').style('fill', '#ffffff').text(idx + 1);
-  });
-}
-
 function buildReport() {
   if (!routeData || points.length < 2) { alert('Carica prima un percorso e definisci le sezioni.'); return; }
   const sections = computeSections();
@@ -964,7 +907,6 @@ function buildReport() {
     <div class="report-header">
       <div>
         <h1>${routeName}</h1>
-        <div class="report-sub">Piano di gara per sezioni — RouteSplitter</div>
       </div>
       <div class="report-date">
         Generato il ${new Date().toLocaleDateString('it-IT')}${startTimeStr ? `<br/>Partenza ore ${startTimeStr}` : ''}
@@ -1002,14 +944,55 @@ function buildReport() {
     </table>
     <div class="report-footer">Generato con RouteSplitter — © 2026 Andrea Bonvicin</div>
   `;
-  buildReportMap(document.getElementById('reportMap'));
   buildReportChart(document.getElementById('reportChart'));
 }
 
-document.getElementById('exportReportBtn').addEventListener('click', () => {
+// ── Esportazione: usa la mappa Leaflet reale (non solo la planimetria vettoriale) ──
+// La spostiamo temporaneamente dentro il report, fuori schermo, per lasciare che
+// Leaflet calcoli le dimensioni corrette e le tile carichino, poi stampiamo.
+function exportReportPDF() {
+  if (!routeData || points.length < 2) { alert('Carica prima un percorso e definisci le sezioni.'); return; }
+  if (!map) { alert('Mappa non pronta, riprova tra un istante.'); return; }
   buildReport();
-  setTimeout(() => window.print(), 60); // piccolo delay per lasciar renderizzare l'SVG del grafico
-});
+
+  const reportView = document.getElementById('reportView');
+  const mapDiv = document.getElementById('map');
+  const mapWrap = document.getElementById('reportMap');
+  mapWrap.innerHTML = '';
+  mapWrap.appendChild(mapDiv);
+
+  window._reportExportInProgress = true;
+  reportView.classList.add('exporting');
+  setTimeout(() => {
+    map.invalidateSize();
+    if (window._routeBounds) map.fitBounds(window._routeBounds, { padding: [20, 20] });
+    // attesa aggiuntiva per il caricamento delle tile dopo il resize
+    setTimeout(() => {
+      reportView.classList.remove('exporting'); // torna in flusso normale: il CSS @media print lo rende visibile in stampa
+      window.print();
+      // rete di sicurezza: se 'afterprint' non scattasse in qualche browser, ripristiniamo comunque
+      setTimeout(restoreMapAfterReport, 4000);
+    }, 700);
+  }, 80);
+}
+
+function restoreMapAfterReport() {
+  if (!window._reportExportInProgress) return;
+  window._reportExportInProgress = false;
+  document.getElementById('reportView').classList.remove('exporting');
+  const mapDiv = document.getElementById('map');
+  const mapPanel = document.getElementById('mapPanel');
+  if (mapDiv && mapPanel && mapDiv.parentElement !== mapPanel) {
+    mapPanel.appendChild(mapDiv);
+    if (map) setTimeout(() => {
+      map.invalidateSize();
+      if (window._routeBounds) map.fitBounds(window._routeBounds, { padding: [40, 40] });
+    }, 60);
+  }
+}
+window.addEventListener('afterprint', restoreMapAfterReport);
+
+document.getElementById('exportReportBtn').addEventListener('click', exportReportPDF);
 
 function setAddMode(v) {
   addMode = v;
@@ -1070,6 +1053,7 @@ function initMap() {
 
   const latlngs = routeData.points.map(p => [p.lat, p.lon]);
   const routeBounds = L.latLngBounds(latlngs);
+  window._routeBounds = routeBounds;
   setTimeout(() => { map.invalidateSize(); map.fitBounds(routeBounds, { padding: [40, 40] }); }, 100);
 
   map.whenReady(() => {
