@@ -196,6 +196,33 @@ input[type="file"] { display:none; }
 @media (max-width: 720px) {
   #map { height: 360px; }
 }
+
+/* ═══════════════════════════════════════════════════════
+   REPORT STAMPABILE — nascosto a schermo, visibile solo in stampa
+   ═══════════════════════════════════════════════════════ */
+.report-view { display: none; }
+.report-header { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; border-bottom:2px solid #111827; padding-bottom:10px; margin-bottom:14px; }
+.report-header h1 { font-size:1.4rem; margin:0 0 4px 0; color:#111827; font-family:'Outfit',sans-serif; }
+.report-header .report-sub { font-size:0.8rem; color:#4b5563; }
+.report-header .report-date { font-size:0.72rem; color:#9ca3af; text-align:right; white-space:nowrap; }
+.report-stats { display:flex; gap:18px; flex-wrap:wrap; margin-bottom:16px; font-size:0.78rem; }
+.report-stats .rs-item { display:flex; flex-direction:column; gap:2px; }
+.report-stats .rs-label { color:#6b7280; font-size:0.68rem; text-transform:uppercase; letter-spacing:0.03em; }
+.report-stats .rs-value { font-weight:700; color:#111827; font-size:0.95rem; font-family:'JetBrains Mono',monospace; }
+#reportMap { margin-bottom: 14px; }
+#reportChart { margin-bottom:18px; }
+.report-table { width:100%; border-collapse:collapse; font-size:0.68rem; }
+.report-table th, .report-table td { border:1px solid #d1d5db; padding:4px 6px; text-align:center; }
+.report-table thead th { background:#f3f4f6; font-weight:700; color:#374151; }
+.report-table td.rt-name { text-align:left; font-weight:600; }
+.report-table tfoot td { font-weight:700; background:#f9fafb; }
+.report-footer { margin-top:14px; font-size:0.65rem; color:#9ca3af; text-align:center; }
+
+@media print {
+  body > *:not(.report-view) { display:none !important; }
+  .report-view { display:block !important; }
+  @page { margin: 14mm; }
+}
 </style>
 </head>
 <body>
@@ -221,6 +248,11 @@ input[type="file"] { display:none; }
 
     <div class="top-bar">
       <input type="text" id="routeName" class="route-name-input" value="Il mio percorso"/>
+      <label style="display:flex;align-items:center;gap:6px;font-size:0.78rem;color:var(--text-muted);white-space:nowrap;">
+        Ora partenza (opz.)
+        <input type="time" id="startTimeInput" style="background:var(--surface2); border:1px solid var(--border); border-radius:8px; color:var(--accent5); font-family:'JetBrains Mono',monospace; padding:6px 8px;"/>
+      </label>
+      <button class="btn ghost" id="exportReportBtn">🖨️ Esporta report PDF</button>
       <button class="btn ghost" id="newGpxBtn">📂 Nuovo GPX</button>
     </div>
 
@@ -294,6 +326,8 @@ input[type="file"] { display:none; }
     <a href="https://linktr.ee/bonvicin.coaching" target="_blank" rel="noopener noreferrer">© 2026 Andrea Bonvicin</a>
   </footer>
 </div>
+
+<div class="report-view" id="reportView"></div>
 
 <script>
 // ═══════════════════════════════════════════════════════
@@ -708,6 +742,273 @@ document.getElementById('importSectionsInput').addEventListener('change', (e) =>
   const file = e.target.files[0];
   if (file) importSections(file);
   e.target.value = '';
+});
+
+// ═══════════════════════════════════════════════════════
+// REPORT STAMPABILE — mini-report PDF per l'atleta
+// ═══════════════════════════════════════════════════════
+
+// Grafico altimetria semplificato e statico per il report: stesso stile
+// cromatico del grafico principale, ma senza zoom/tooltip/interazioni,
+// con i soli punti di sezione numerati.
+function buildReportChart(container) {
+  container.innerHTML = '';
+  const pts = routeData.points;
+  const totalW = 900, totalH = 300;
+  const margin = { top: 20, right: 20, bottom: 36, left: 55 };
+  const W = totalW - margin.left - margin.right;
+  const H = totalH - margin.top - margin.bottom;
+
+  const ptDistances = pts.map(p => p.dist);
+  const smEleFull = smoothByDistance(pts.map(p => p.ele), ptDistances, smoothingRadiusMeters());
+  const fullData = pts.map((p, i) => ({ dist: p.dist / 1000, ele: p.ele, eleSmooth: smEleFull[i] }));
+
+  const rawG = [0];
+  for (let i = 1; i < pts.length; i++) {
+    const dDist = pts[i].dist - pts[i - 1].dist;
+    const dEle = pts[i].ele - pts[i - 1].ele;
+    rawG.push(dDist > 0 ? (dEle / dDist) * 100 : 0);
+  }
+  const smG = smoothByDistance(rawG, ptDistances, smoothingRadiusMeters());
+
+  const fullMaxDist = d3.max(fullData, d => d.dist);
+  const xScale = d3.scaleLinear().domain([0, fullMaxDist]).range([0, W]);
+
+  // Stesso criterio di headroom del grafico interattivo, per lasciare spazio alle etichette di sezione
+  const elevations = fullData.map(d => d.eleSmooth);
+  const minEle = Math.min(...elevations);
+  const maxEle = Math.max(...elevations);
+  const elevationGain = maxEle - minEle;
+  const paddingTop = 210;
+  const paddingBottom = minEle >= 100 ? 60 : Math.max(0, minEle * 0.4);
+  const rangeY_base = Math.max(elevationGain * 1.5, elevationGain + 210);
+  const rangeY_final = rangeY_base + paddingBottom + paddingTop;
+  const roundTo = 50;
+  const yMin = Math.floor((minEle - paddingBottom) / roundTo) * roundTo;
+  const yMaxRaw = Math.ceil((yMin + rangeY_final) / roundTo) * roundTo;
+  const yMaxCap = Math.ceil((maxEle + paddingTop) / roundTo) * roundTo;
+  const yMax = Math.min(yMaxRaw, yMaxCap);
+  const yScale = d3.scaleLinear().domain([Math.max(0, yMin), yMax]).range([H, 0]);
+
+  const svg = d3.select(container).append('svg')
+    .attr('viewBox', `0 0 ${totalW} ${totalH}`)
+    .attr('preserveAspectRatio', 'xMidYMid meet')
+    .style('width', '100%').style('height', 'auto').style('display', 'block');
+
+  const g = svg.append('g').attr('transform', `translate(${margin.left},${margin.top})`);
+
+  const xAxisG = g.append('g').attr('transform', `translate(0,${H})`);
+  xAxisG.call(d3.axisBottom(xScale).ticks(8).tickFormat(d => d.toFixed(0) + ' km')).selectAll('text').style('font-size', '9px');
+  const yAxisG = g.append('g');
+  yAxisG.call(d3.axisLeft(yScale).ticks(5).tickFormat(d => d + ' m')).selectAll('text').style('font-size', '9px');
+  g.selectAll('.domain').style('stroke', '#9ca3af');
+  g.selectAll('.tick line').style('stroke', '#9ca3af');
+
+  const gridG = g.append('g');
+  gridG.call(d3.axisLeft(yScale).ticks(5).tickSize(-W).tickFormat('')).selectAll('line').style('stroke', '#e5e7eb').style('stroke-dasharray', '2,2');
+  gridG.select('.domain').remove();
+
+  function getGradientAtDist(targetDist) {
+    let lo = 0, hi = fullData.length - 1;
+    while (lo < hi - 1) { const mid = (lo + hi) >> 1; if (fullData[mid].dist < targetDist) lo = mid; else hi = mid; }
+    const closest = Math.abs(fullData[lo].dist - targetDist) < Math.abs(fullData[hi].dist - targetDist) ? lo : hi;
+    return smG[closest];
+  }
+
+  for (let i = 1; i < fullData.length; i++) {
+    const p1 = fullData[i - 1], p2 = fullData[i];
+    const color = getGradientColor(getGradientAtDist(p2.dist));
+    const path = `M${xScale(p1.dist)},${yScale(p1.eleSmooth)} L${xScale(p2.dist)},${yScale(p2.eleSmooth)} L${xScale(p2.dist)},${H} L${xScale(p1.dist)},${H} Z`;
+    g.append('path').attr('d', path).attr('fill', color).attr('opacity', 0.65);
+  }
+
+  // Punti di sezione numerati
+  const markerY = 18;
+  points.forEach((p, idx) => {
+    const x = xScale(p.distKm);
+    const color = markerColor(p.fixed);
+    const grp = g.append('g').attr('transform', `translate(${x},0)`);
+    grp.append('line').attr('y1', 0).attr('y2', H).attr('stroke', color).attr('stroke-dasharray', '3,3').attr('stroke-width', 1.2).attr('opacity', 0.8);
+    grp.append('circle').attr('cy', markerY).attr('r', 8).attr('fill', color).attr('stroke', '#fff').attr('stroke-width', 1.5);
+    grp.append('text').attr('y', markerY + 3.2).attr('text-anchor', 'middle').attr('font-size', '9px').attr('font-weight', '800').style('fill', '#ffffff').text(idx + 1);
+  });
+
+  // Etichette con numero sezione, distanza, tempo previsto e velocità media (stesso stile del grafico interattivo)
+  const segLabelY = 40;
+  for (let i = 1; i < points.length; i++) {
+    const from = points[i - 1], to = points[i];
+    const xMid = (xScale(from.distKm) + xScale(to.distKm)) / 2;
+    const pxWidth = xScale(to.distKm) - xScale(from.distKm);
+    if (pxWidth < 46) continue;
+    const distanceKm = to.distKm - from.distKm;
+    const speed = to.speed || 0;
+    const timeHours = speed > 0 ? distanceKm / speed : 0;
+    const lg = g.append('g').attr('transform', `translate(${xMid},${segLabelY})`);
+    lg.append('text').attr('text-anchor', 'middle').attr('y', 0)
+      .attr('font-size', '11px').attr('font-weight', '800').style('fill', '#475569').text(i);
+    lg.append('text').attr('text-anchor', 'middle').attr('y', 11)
+      .attr('font-size', '8.5px').attr('font-weight', '600').style('fill', '#94a3b8').text(`${distanceKm.toFixed(1)} km`);
+    lg.append('text').attr('text-anchor', 'middle').attr('y', 21)
+      .attr('font-size', '8.5px').attr('font-weight', '600').style('fill', '#94a3b8').text(formatTime(timeHours));
+    lg.append('text').attr('text-anchor', 'middle').attr('y', 31)
+      .attr('font-size', '8.5px').attr('font-weight', '600').style('fill', '#94a3b8').text(`${speed.toFixed(1)} km/h`);
+    const bbox = lg.node().getBBox();
+    lg.insert('rect', 'text')
+      .attr('x', bbox.x - 5).attr('y', bbox.y - 2.5).attr('width', bbox.width + 10).attr('height', bbox.height + 5)
+      .attr('rx', 6).attr('fill', '#ffffff').attr('fill-opacity', 0.85).attr('stroke', '#e5e7eb').attr('stroke-width', 1);
+  }
+}
+
+// Planimetria semplificata per il report: traccia colorata per pendenza (stesso schema
+// della mappa Leaflet) proiettata in 2D, senza tile esterne, così stampa sempre in modo affidabile.
+function buildReportMap(container) {
+  container.innerHTML = '';
+  const pts = routeData.points;
+  const totalW = 900, totalH = 340;
+  const margin = { top: 16, right: 16, bottom: 16, left: 16 };
+  const W = totalW - margin.left - margin.right;
+  const H = totalH - margin.top - margin.bottom;
+
+  const gradients = pts.map(p => p.gradient);
+  const distances = pts.map(p => p.dist);
+  const smoothed = smoothByDistance(gradients, distances, smoothingRadiusMeters());
+
+  const lats = pts.map(p => p.lat), lons = pts.map(p => p.lon);
+  const minLat = Math.min(...lats), maxLat = Math.max(...lats);
+  const minLon = Math.min(...lons), maxLon = Math.max(...lons);
+  const avgLatRad = ((minLat + maxLat) / 2) * Math.PI / 180;
+  const lonFactor = Math.cos(avgLatRad); // correzione di proiezione equirettangolare
+
+  const spanX = (maxLon - minLon) * lonFactor;
+  const spanY = (maxLat - minLat);
+  const scale = Math.min(spanX > 0 ? W / spanX : 1, spanY > 0 ? H / spanY : 1) * 0.92;
+  const offsetX = margin.left + (W - spanX * scale) / 2;
+  const offsetY = margin.top + (H - spanY * scale) / 2;
+
+  function project(lat, lon) {
+    const x = offsetX + (lon - minLon) * lonFactor * scale;
+    const y = offsetY + (maxLat - lat) * scale; // lat crescente verso l'alto → y decrescente
+    return [x, y];
+  }
+
+  const svg = d3.select(container).append('svg')
+    .attr('viewBox', `0 0 ${totalW} ${totalH}`)
+    .attr('preserveAspectRatio', 'xMidYMid meet')
+    .style('width', '100%').style('height', 'auto').style('display', 'block');
+
+  svg.append('rect').attr('x', 0).attr('y', 0).attr('width', totalW).attr('height', totalH).attr('fill', '#f8fafc').attr('stroke', '#e5e7eb');
+
+  const g = svg.append('g');
+
+  for (let i = 1; i < pts.length; i++) {
+    const p1 = pts[i - 1], p2 = pts[i];
+    const [x1, y1] = project(p1.lat, p1.lon);
+    const [x2, y2] = project(p2.lat, p2.lon);
+    const color = getGradientColor(smoothed[i]);
+    g.append('line').attr('x1', x1).attr('y1', y1).attr('x2', x2).attr('y2', y2)
+      .attr('stroke', color).attr('stroke-width', 4.5).attr('stroke-linecap', 'round');
+  }
+
+  // Punti di sezione numerati sulla planimetria
+  points.forEach((p, idx) => {
+    const ip = getInterpolatedPoint(p.distKm);
+    const [x, y] = project(ip.lat, ip.lon);
+    const color = markerColor(p.fixed);
+    const grp = g.append('g').attr('transform', `translate(${x},${y})`);
+    grp.append('circle').attr('r', 9).attr('fill', color).attr('stroke', '#fff').attr('stroke-width', 2);
+    grp.append('text').attr('y', 3.2).attr('text-anchor', 'middle').attr('font-size', '9.5px').attr('font-weight', '800').style('fill', '#ffffff').text(idx + 1);
+  });
+}
+
+function buildReport() {
+  if (!routeData || points.length < 2) { alert('Carica prima un percorso e definisci le sezioni.'); return; }
+  const sections = computeSections();
+  const routeName = document.getElementById('routeName').value || 'Percorso';
+  const startTimeStr = document.getElementById('startTimeInput').value; // "HH:MM" oppure ""
+  const finalAvgSpeed = sections.length > 0 ? sections[sections.length - 1].cumAvgSpeed : 0;
+  const totalTime = sections.length > 0 ? sections[sections.length - 1].cumTime : 0;
+  const totalGain = sections.reduce((s, x) => s + x.gain, 0);
+  const totalLoss = sections.reduce((s, x) => s + x.loss, 0);
+
+  // Se è impostata un'ora di partenza, calcola l'orario di arrivo cumulato per ogni sezione
+  function clockTimeAfter(hoursFromStart) {
+    if (!startTimeStr) return null;
+    const [sh, sm] = startTimeStr.split(':').map(Number);
+    const totalMin = sh * 60 + sm + Math.round(hoursFromStart * 60);
+    const h = Math.floor(totalMin / 60) % 24;
+    const m = totalMin % 60;
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+  }
+
+  const rows = sections.map(s => {
+    const name = s.to.sectionLabel || `Sezione ${s.index}`;
+    const clock = clockTimeAfter(s.cumTime);
+    return `
+      <tr>
+        <td>${s.index}</td>
+        <td class="rt-name">${name}</td>
+        <td>${s.from.distKm.toFixed(2)} → ${s.to.distKm.toFixed(2)} km</td>
+        <td>${s.distanceKm.toFixed(2)} km</td>
+        <td>${gradeText(s.gradient)}</td>
+        <td>+${Math.round(s.gain)} / −${Math.round(s.loss)} m</td>
+        <td>${s.timeHours > 0 ? (s.vam >= 0 ? '+' : '') + Math.round(s.vam) + ' m/h' : '—'}</td>
+        <td>${s.speed.toFixed(1)} km/h</td>
+        <td>${s.cumAvgSpeed.toFixed(1)} km/h</td>
+        <td>${formatTime(s.timeHours)}</td>
+        <td>${formatTime(s.cumTime)}${clock ? ` <span style="color:#6b7280;">(${clock})</span>` : ''}</td>
+      </tr>`;
+  }).join('');
+
+  const reportView = document.getElementById('reportView');
+  reportView.innerHTML = `
+    <div class="report-header">
+      <div>
+        <h1>${routeName}</h1>
+        <div class="report-sub">Piano di gara per sezioni — RouteSplitter</div>
+      </div>
+      <div class="report-date">
+        Generato il ${new Date().toLocaleDateString('it-IT')}${startTimeStr ? `<br/>Partenza ore ${startTimeStr}` : ''}
+      </div>
+    </div>
+    <div class="report-stats">
+      <div class="rs-item"><span class="rs-label">Distanza totale</span><span class="rs-value">${routeData.distanceKm.toFixed(2)} km</span></div>
+      <div class="rs-item"><span class="rs-label">Dislivello +</span><span class="rs-value">${Math.round(totalGain)} m</span></div>
+      <div class="rs-item"><span class="rs-label">Dislivello −</span><span class="rs-value">${Math.round(totalLoss)} m</span></div>
+      <div class="rs-item"><span class="rs-label">Tempo previsto</span><span class="rs-value">${formatTime(totalTime)}</span></div>
+      <div class="rs-item"><span class="rs-label">Vel. media finale</span><span class="rs-value">${finalAvgSpeed.toFixed(1)} km/h</span></div>
+    </div>
+    <div id="reportMap"></div>
+    <div id="reportChart"></div>
+    <table class="report-table">
+      <thead>
+        <tr>
+          <th>#</th><th>Sezione</th><th>Da → A</th><th>Distanza</th><th>Pend. media</th><th>Dislivello</th><th>VAM</th><th>Vel. media</th><th>Vel. media cum.</th><th>Tempo</th><th>Tempo cum.${startTimeStr ? ' (orario)' : ''}</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+      <tfoot>
+        <tr>
+          <td colspan="3">Totale</td>
+          <td>${routeData.distanceKm.toFixed(2)} km</td>
+          <td></td>
+          <td>+${Math.round(totalGain)} / −${Math.round(totalLoss)} m</td>
+          <td></td>
+          <td></td>
+          <td>${finalAvgSpeed.toFixed(1)} km/h</td>
+          <td>${formatTime(totalTime)}</td>
+          <td>${formatTime(totalTime)}${clockTimeAfter(totalTime) ? ` (${clockTimeAfter(totalTime)})` : ''}</td>
+        </tr>
+      </tfoot>
+    </table>
+    <div class="report-footer">Generato con RouteSplitter — © 2026 Andrea Bonvicin</div>
+  `;
+  buildReportMap(document.getElementById('reportMap'));
+  buildReportChart(document.getElementById('reportChart'));
+}
+
+document.getElementById('exportReportBtn').addEventListener('click', () => {
+  buildReport();
+  setTimeout(() => window.print(), 60); // piccolo delay per lasciar renderizzare l'SVG del grafico
 });
 
 function setAddMode(v) {
