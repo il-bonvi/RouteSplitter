@@ -830,7 +830,8 @@ function buildElevationChart(zoomDomain) {
     return smG[closest];
   }
 
-  for (let i = Math.max(1, startDisplayIdx); i < displayEnd; i++) {
+  const displayEndExt = Math.min(displayEnd + 1, displayData.length - 1);
+  for (let i = Math.max(1, startDisplayIdx); i <= displayEndExt; i++) {
     const p1 = displayData[i - 1], p2 = displayData[i];
     const color = getGradientColor(getGradientAtDist(p2.dist));
     const path = `M${xScale(p1.dist)},${yScale(p1.eleSmooth)} L${xScale(p2.dist)},${yScale(p2.eleSmooth)} L${xScale(p2.dist)},${H} L${xScale(p1.dist)},${H} Z`;
