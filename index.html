@@ -169,8 +169,8 @@ input[type="file"] { display:none; }
 .seg-num { display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; border-radius:50%; background:var(--surface3); font-family:'JetBrains Mono',monospace; font-size:0.72rem; font-weight:700; color:var(--accent); }
 .seg-table input[type=text] { width:100%; min-width:130px; background:transparent; border:none; color:var(--text); font-family:'Outfit',sans-serif; font-size:0.85rem; font-weight:600; padding:5px 4px; outline:none; border-radius:6px; transition:.2s; }
 .seg-table input[type=text]:focus { background: rgba(0,229,255,0.08); }
-.seg-table input[type=number] { width:70px; background:var(--surface2); border:1px solid var(--border); border-radius:8px; color: var(--accent5); font-family:'JetBrains Mono',monospace; font-size:0.85rem; font-weight:600; padding:6px 4px; outline:none; text-align:center; -moz-appearance:textfield; }
-.seg-table input[type=number]::-webkit-inner-spin-button, .seg-table input[type=number]::-webkit-outer-spin-button { -webkit-appearance:none; }
+.seg-table input[type=number] { width:70px; background:var(--surface2); border:1px solid var(--border); border-radius:8px; color: var(--accent5); font-family:'JetBrains Mono',monospace; font-size:0.85rem; font-weight:600; padding:6px 4px; outline:none; text-align:center; -moz-appearance:textfield; appearance:textfield; }
+.seg-table input[type=number]::-webkit-inner-spin-button, .seg-table input[type=number]::-webkit-outer-spin-button { -webkit-appearance:none; appearance:none; }
 .seg-table input[type=number]:focus { border-color: var(--accent5); box-shadow: 0 0 10px rgba(245,158,11,0.2); }
 .seg-table .calc { font-family:'JetBrains Mono',monospace; color:var(--text-muted); }
 .seg-table .calc.dist { color: var(--accent); font-weight:600; }
