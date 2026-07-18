@@ -18,7 +18,7 @@
   --surface2: #1a2236;
   --surface3: #243044;
   --accent: #00e5ff;
-  --accent2: #7c3aed;
+  --accent2: #a646e6;
   --accent3: #f43f5e;
   --accent4: #10b981;
   --accent5: #f59e0b;
@@ -82,7 +82,7 @@ body {
 input[type="file"] { display:none; }
 
 /* ── STATS ── */
-.stats-row { display:grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap:10px; margin-bottom: 20px; max-width: 720px; }
+.stats-row { display:grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap:10px; margin-bottom: 20px; max-width: 880px; }
 .stat-card { background: var(--surface); border:1px solid var(--border); border-radius:10px; padding:10px 12px; animation: fadeUp 0.5s cubic-bezier(.22,1,.36,1) both; }
 .stat-card .label { font-size:0.6rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:1.1px; }
 .stat-card .value { font-size:1.1rem; font-weight:700; margin-top:2px; font-family:'JetBrains Mono',monospace; }
@@ -90,6 +90,7 @@ input[type="file"] { display:none; }
 .stat-card.gain .value { color: var(--accent4); }
 .stat-card.loss .value { color: var(--accent3); }
 .stat-card.time .value { color: var(--accent5); }
+.stat-card.avgspeed .value { color: var(--accent2); }
 .stat-card.dist .value { color: var(--accent); }
 
 .top-bar { display:flex; justify-content:space-between; align-items:center; gap:16px; flex-wrap:wrap; margin-bottom: 6px; }
@@ -1025,11 +1026,13 @@ function renderStats(sections) {
   const totalGain = sections.reduce((s, x) => s + x.gain, 0);
   const totalLoss = sections.reduce((s, x) => s + x.loss, 0);
   const totalTime = sections.reduce((s, x) => s + x.timeHours, 0);
+  const finalAvgSpeed = sections.length > 0 ? sections[sections.length - 1].cumAvgSpeed : 0;
   document.getElementById('statsRow').innerHTML = `
     <div class="stat-card dist"><div class="label">Distanza totale</div><div class="value">${routeData.distanceKm.toFixed(2)}<span class="unit">km</span></div></div>
     <div class="stat-card gain"><div class="label">Dislivello +</div><div class="value">${Math.round(totalGain)}<span class="unit">m</span></div></div>
     <div class="stat-card loss"><div class="label">Dislivello −</div><div class="value">${Math.round(totalLoss)}<span class="unit">m</span></div></div>
     <div class="stat-card time"><div class="label">Tempo previsto</div><div class="value" style="font-size:1.3rem">${formatTime(totalTime)}</div></div>
+    <div class="stat-card avgspeed"><div class="label">Vel. media finale</div><div class="value">${finalAvgSpeed.toFixed(1)}<span class="unit">km/h</span></div></div>
   `;
 }
 
