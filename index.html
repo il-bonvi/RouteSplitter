@@ -257,8 +257,8 @@ input[type="file"] { display:none; }
             </div>
             <div style="display:flex;align-items:center;gap:8px;font-size:0.8rem;color:#6b7280;white-space:nowrap;">
               <span>Smoothing:</span>
-              <input type="range" id="smoothing-slider" min="0" max="12" value="3" step="1" style="width:90px;accent-color:#fc5200;" oninput="updateSmoothing(this.value)">
-              <span id="smoothing-label" style="min-width:40px;">3 pt</span>
+              <input type="range" id="smoothing-slider" min="0" max="12" value="5" step="1" style="width:90px;accent-color:#fc5200;" oninput="updateSmoothing(this.value)">
+              <span id="smoothing-label" style="min-width:40px;">50 m</span>
             </div>
           </div>
         </div>
@@ -307,7 +307,7 @@ let markerLayerGroup = null;
 let _hoverMapMarker = null;
 let _zoomStartMarker = null;
 let _zoomEndMarker = null;
-let _smoothingWindow = 3;
+let _smoothingWindow = 5;
 window._currentZoomDomain = null;
 
 // ═══════════════════════════════════════════════════════
@@ -382,6 +382,30 @@ function smoothGradient(gradients, windowSize = 6) {
     smoothed.push(sum / count);
   }
   return smoothed;
+}
+
+// Smoothing "a distanza costante" — media mobile su una finestra fisica in metri
+// (anziché su un numero fisso di punti). I punti GPX non sono equidistanti: usare
+// una finestra a metri garantisce uno smussamento coerente lungo tutto il percorso,
+// indipendentemente da quanto sono fitti/radi i punti in un dato tratto.
+// distances e values devono essere allineati per indice e distances deve essere crescente.
+function smoothByDistance(values, distances, radiusMeters) {
+  const n = values.length;
+  if (!(radiusMeters > 0)) return values.slice();
+  const smoothed = new Array(n);
+  let lo = 0, hi = 0, sum = 0, count = 0;
+  for (let i = 0; i < n; i++) {
+    const center = distances[i];
+    while (hi < n && distances[hi] <= center + radiusMeters) { sum += values[hi]; count++; hi++; }
+    while (lo < n && distances[lo] < center - radiusMeters) { sum -= values[lo]; count--; lo++; }
+    smoothed[i] = count > 0 ? sum / count : values[i];
+  }
+  return smoothed;
+}
+
+// Converte il valore dello slider (0-12) in un raggio fisico in metri.
+function smoothingRadiusMeters() {
+  return _smoothingWindow * 10;
 }
 
 // ── LTTB downsampling — identico a gara.html ──
@@ -664,7 +688,8 @@ function drawGradientPolyline() {
   _gradientLayers.forEach(l => map.removeLayer(l));
   _gradientLayers = [];
   const gradients = routeData.points.map(p => p.gradient);
-  const smoothed = smoothGradient(gradients, _smoothingWindow);
+  const distances = routeData.points.map(p => p.dist);
+  const smoothed = smoothByDistance(gradients, distances, smoothingRadiusMeters());
   for (let i = 1; i < routeData.points.length; i++) {
     const p1 = routeData.points[i - 1], p2 = routeData.points[i];
     const color = getGradientColor(smoothed[i]);
@@ -679,12 +704,24 @@ function updateSmoothing(val) {
   const slider = document.getElementById('smoothing-slider');
   if (slider) slider.value = val;
   const label = document.getElementById('smoothing-label');
-  if (label) label.textContent = val + ' pt';
+  if (label) label.textContent = (val * 10) + ' m';
   if (routeData) {
     buildElevationChart(window._currentZoomDomain || null);
     drawGradientPolyline();
   }
 }
+
+document.addEventListener('DOMContentLoaded', () => {
+  const slider = document.getElementById('smoothing-slider');
+  if (slider) {
+    slider.value = _smoothingWindow;
+    slider.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const delta = e.deltaY < 0 ? 1 : -1;
+      updateSmoothing(_smoothingWindow + delta);
+    }, { passive: false });
+  }
+});
 
 function renderMapMarkers() {
   if (!markerLayerGroup) return;
@@ -727,7 +764,9 @@ function buildElevationChart(zoomDomain) {
   const W = totalW - margin.left - margin.right;
   const H = totalH - margin.top - margin.bottom;
 
-  const fullData = pts.map(p => ({ dist: p.dist / 1000, ele: p.ele }));
+  const ptDistances = pts.map(p => p.dist);
+  const smEleFull = smoothByDistance(pts.map(p => p.ele), ptDistances, smoothingRadiusMeters());
+  const fullData = pts.map((p, i) => ({ dist: p.dist / 1000, ele: p.ele, eleSmooth: smEleFull[i] }));
   const fullMaxDist = d3.max(fullData, d => d.dist);
   const isZoomed = !!zoomDomain;
   const [d0, d1] = zoomDomain || [0, fullMaxDist];
@@ -740,11 +779,11 @@ function buildElevationChart(zoomDomain) {
     const dEle = pts[i].ele - pts[i - 1].ele;
     rawG.push(dDist > 0 ? (dEle / dDist) * 100 : 0);
   }
-  const smG = smoothGradient(rawG, _smoothingWindow);
+  const smG = smoothByDistance(rawG, ptDistances, smoothingRadiusMeters());
 
   const xScale = d3.scaleLinear().domain([d0, d1]).range([0, W]);
 
-  const elevations = data.map(d => d.ele);
+  const elevations = data.map(d => d.eleSmooth);
   const minEle = Math.min(...elevations);
   const maxEle = Math.max(...elevations);
   const elevationGain = maxEle - minEle;
@@ -795,9 +834,9 @@ function buildElevationChart(zoomDomain) {
   for (let i = Math.max(1, startDisplayIdx); i < displayEnd; i++) {
     const p1 = displayData[i - 1], p2 = displayData[i];
     const color = getGradientColor(getGradientAtDist(p2.dist));
-    const path = `M${xScale(p1.dist)},${yScale(p1.ele)} L${xScale(p2.dist)},${yScale(p2.ele)} L${xScale(p2.dist)},${H} L${xScale(p1.dist)},${H} Z`;
+    const path = `M${xScale(p1.dist)},${yScale(p1.eleSmooth)} L${xScale(p2.dist)},${yScale(p2.eleSmooth)} L${xScale(p2.dist)},${H} L${xScale(p1.dist)},${H} Z`;
     chartG.append('path').attr('d', path).attr('fill', color).attr('opacity', 0.7).style('pointer-events', 'none');
-    chartG.append('line').attr('x1', xScale(p1.dist)).attr('y1', yScale(p1.ele)).attr('x2', xScale(p2.dist)).attr('y2', yScale(p2.ele))
+    chartG.append('line').attr('x1', xScale(p1.dist)).attr('y1', yScale(p1.eleSmooth)).attr('x2', xScale(p2.dist)).attr('y2', yScale(p2.eleSmooth))
       .attr('stroke', color).attr('stroke-width', 1.5).style('pointer-events', 'none');
   }
 
@@ -863,7 +902,7 @@ function buildElevationChart(zoomDomain) {
     const ptIdx = Math.abs(fullData[lo].dist - dist) < Math.abs(fullData[hi].dist - dist) ? lo : hi;
     const pt = fullData[ptIdx];
     if (pt.dist < d0 || pt.dist > d1) return;
-    const cx = xScale(pt.dist), cy = yScale(pt.ele);
+    const cx = xScale(pt.dist), cy = yScale(pt.eleSmooth);
     hoverLine.attr('x1', cx).attr('x2', cx).attr('opacity', 0.7);
     hoverDot.attr('cx', cx).attr('cy', cy).attr('opacity', 1);
     const grade = smG[ptIdx];
