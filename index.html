@@ -242,6 +242,9 @@ input[type="file"] { display:none; }
           <button class="btn btn-sm ghost" id="manualAddBtn">Aggiungi</button>
         </div>
         <button class="btn btn-sm ghost" id="resetPointsBtn">↺ Reset punti</button>
+        <button class="btn btn-sm ghost" id="exportSectionsBtn">⬇ Esporta sezioni</button>
+        <button class="btn btn-sm ghost" id="importSectionsBtn">⬆ Importa sezioni</button>
+        <input type="file" id="importSectionsInput" accept="application/json,.json" style="display:none"/>
       </div>
 
       <div class="panel">
@@ -513,6 +516,21 @@ function processRoute(rawPoints, fileName) {
 
 // Restituisce lat/lon/ele interpolati alla distanza esatta (km) richiesta,
 // così i punti sezione non sono vincolati alla risoluzione del tracciato GPX.
+function getInterpEleSmooth(fullData, distKm) {
+  const n = fullData.length;
+  if (distKm <= fullData[0].dist) return fullData[0].eleSmooth;
+  if (distKm >= fullData[n - 1].dist) return fullData[n - 1].eleSmooth;
+  let lo = 0, hi = n - 1;
+  while (lo < hi - 1) {
+    const mid = (lo + hi) >> 1;
+    if (fullData[mid].dist < distKm) lo = mid; else hi = mid;
+  }
+  const p1 = fullData[lo], p2 = fullData[hi];
+  const span = p2.dist - p1.dist;
+  const t = span > 0 ? (distKm - p1.dist) / span : 0;
+  return p1.eleSmooth + (p2.eleSmooth - p1.eleSmooth) * t;
+}
+
 function getInterpolatedPoint(distKm) {
   const distM = Math.max(0, distKm) * 1000;
   const pts = routeData.points;
@@ -601,6 +619,97 @@ document.getElementById('manualAddBtn').addEventListener('click', () => {
   const v = parseFloat(document.getElementById('manualKmInput').value);
   if (!isNaN(v)) { addBreakpointAtDistance(v); document.getElementById('manualKmInput').value = ''; }
 });
+
+// ═══════════════════════════════════════════════════════
+// EXPORT / IMPORT SEZIONI — salva e ricarica le modifiche
+// (punti di sezione, nomi, velocità) come file .json
+// ═══════════════════════════════════════════════════════
+function exportSections() {
+  if (!routeData || points.length === 0) { alert('Carica prima un percorso.'); return; }
+  const payload = {
+    type: 'routesplitter-sections',
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    routeName: document.getElementById('routeName').value || '',
+    routeDistanceKm: routeData.distanceKm,
+    defaultSpeed: parseFloat(document.getElementById('defaultSpeed').value) || 40,
+    points: points.map(p => ({ distKm: p.distKm, fixed: p.fixed, sectionLabel: p.sectionLabel, speed: p.speed }))
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const safeName = (payload.routeName || 'percorso').trim().replace(/[^a-z0-9\-_]+/gi, '_').replace(/^_+|_+$/g, '') || 'percorso';
+  a.href = url;
+  a.download = `sezioni_${safeName}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function importSections(file) {
+  if (!routeData) { alert('Carica prima un percorso GPX.'); return; }
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    let payload;
+    try { payload = JSON.parse(e.target.result); } catch (err) { alert('File non valido: non è un JSON leggibile.'); return; }
+    if (!payload || !Array.isArray(payload.points) || payload.points.length < 2) {
+      alert('File non valido: struttura sezioni mancante o incompleta.');
+      return;
+    }
+    if (typeof payload.routeDistanceKm === 'number' && Math.abs(payload.routeDistanceKm - routeData.distanceKm) > 0.05) {
+      const proceed = confirm(
+        `Attenzione: questo file è stato esportato da un percorso di ${payload.routeDistanceKm.toFixed(2)} km, ` +
+        `mentre quello caricato ora è di ${routeData.distanceKm.toFixed(2)} km.\n\n` +
+        `I punti verranno adattati (clampati) al percorso attuale. Continuare comunque?`
+      );
+      if (!proceed) return;
+    }
+    const defSpeed = parseFloat(document.getElementById('defaultSpeed').value) || 40;
+    const imported = payload.points
+      .map(p => ({
+        distKm: Math.min(Math.max(0, Number(p.distKm) || 0), routeData.distanceKm),
+        fixed: p.fixed === 'start' || p.fixed === 'finish' ? p.fixed : false,
+        sectionLabel: p.sectionLabel != null ? String(p.sectionLabel) : 'Sezione',
+        speed: p.speed != null && !isNaN(parseFloat(p.speed)) ? parseFloat(p.speed) : defSpeed
+      }))
+      .sort((a, b) => a.distKm - b.distKm);
+
+    // Garantisce sempre un punto di partenza (0 km) e uno di arrivo (fine percorso) fissi.
+    if (imported.length === 0 || imported[0].fixed !== 'start') {
+      imported.unshift({ distKm: 0, fixed: 'start', sectionLabel: null, speed: null });
+    } else {
+      imported[0].distKm = 0;
+      imported[0].sectionLabel = null;
+      imported[0].speed = null;
+    }
+    const lastIdx = imported.length - 1;
+    if (imported[lastIdx].fixed !== 'finish') {
+      imported.push({ distKm: routeData.distanceKm, fixed: 'finish', sectionLabel: imported[lastIdx].sectionLabel || 'Sezione', speed: imported[lastIdx].speed || defSpeed });
+    } else {
+      imported[lastIdx].distKm = routeData.distanceKm;
+    }
+
+    let id = 1;
+    points = imported.map(p => ({ id: id++, ...p }));
+    nextId = id;
+    if (typeof payload.routeName === 'string' && payload.routeName.trim()) {
+      document.getElementById('routeName').value = payload.routeName;
+    }
+    refreshAll();
+    flashMessage('Sezioni importate correttamente ✓');
+  };
+  reader.readAsText(file);
+}
+
+document.getElementById('exportSectionsBtn').addEventListener('click', exportSections);
+document.getElementById('importSectionsBtn').addEventListener('click', () => document.getElementById('importSectionsInput').click());
+document.getElementById('importSectionsInput').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (file) importSections(file);
+  e.target.value = '';
+});
+
 function setAddMode(v) {
   addMode = v;
   document.getElementById('addModeBtn').classList.toggle('active', v);
@@ -830,14 +939,39 @@ function buildElevationChart(zoomDomain) {
     return smG[closest];
   }
 
-  const displayEndExt = Math.min(displayEnd + 1, displayData.length - 1);
-  for (let i = Math.max(1, startDisplayIdx); i <= displayEndExt; i++) {
+  for (let i = Math.max(1, startDisplayIdx); i < displayEnd; i++) {
     const p1 = displayData[i - 1], p2 = displayData[i];
     const color = getGradientColor(getGradientAtDist(p2.dist));
     const path = `M${xScale(p1.dist)},${yScale(p1.eleSmooth)} L${xScale(p2.dist)},${yScale(p2.eleSmooth)} L${xScale(p2.dist)},${H} L${xScale(p1.dist)},${H} Z`;
     chartG.append('path').attr('d', path).attr('fill', color).attr('opacity', 0.7).style('pointer-events', 'none');
     chartG.append('line').attr('x1', xScale(p1.dist)).attr('y1', yScale(p1.eleSmooth)).attr('x2', xScale(p2.dist)).attr('y2', yScale(p2.eleSmooth))
       .attr('stroke', color).attr('stroke-width', 1.5).style('pointer-events', 'none');
+  }
+
+  // Se lo zoom taglia i dati tra due campioni GPX, il ciclo sopra si ferma all'ultimo
+  // campione realmente disponibile, lasciando uno spazio vuoto fino al bordo esatto
+  // della selezione. Chiudiamo i due bordi con un segmento sintetico interpolato.
+  if (isZoomed && displayData.length) {
+    const firstIdx = Math.max(0, startDisplayIdx === -1 ? 0 : startDisplayIdx);
+    const lastIdx = displayEnd - 1;
+    if (firstIdx >= 0 && displayData[firstIdx] && displayData[firstIdx].dist > d0 + 1e-9) {
+      const p2 = displayData[firstIdx];
+      const eleAtD0 = getInterpEleSmooth(fullData, d0);
+      const color = getGradientColor(getGradientAtDist(p2.dist));
+      const path = `M${xScale(d0)},${yScale(eleAtD0)} L${xScale(p2.dist)},${yScale(p2.eleSmooth)} L${xScale(p2.dist)},${H} L${xScale(d0)},${H} Z`;
+      chartG.append('path').attr('d', path).attr('fill', color).attr('opacity', 0.7).style('pointer-events', 'none');
+      chartG.append('line').attr('x1', xScale(d0)).attr('y1', yScale(eleAtD0)).attr('x2', xScale(p2.dist)).attr('y2', yScale(p2.eleSmooth))
+        .attr('stroke', color).attr('stroke-width', 1.5).style('pointer-events', 'none');
+    }
+    if (lastIdx >= 0 && displayData[lastIdx] && displayData[lastIdx].dist < d1 - 1e-9) {
+      const p1 = displayData[lastIdx];
+      const eleAtD1 = getInterpEleSmooth(fullData, d1);
+      const color = getGradientColor(getGradientAtDist(d1));
+      const path = `M${xScale(p1.dist)},${yScale(p1.eleSmooth)} L${xScale(d1)},${yScale(eleAtD1)} L${xScale(d1)},${H} L${xScale(p1.dist)},${H} Z`;
+      chartG.append('path').attr('d', path).attr('fill', color).attr('opacity', 0.7).style('pointer-events', 'none');
+      chartG.append('line').attr('x1', xScale(p1.dist)).attr('y1', yScale(p1.eleSmooth)).attr('x2', xScale(d1)).attr('y2', yScale(eleAtD1))
+        .attr('stroke', color).attr('stroke-width', 1.5).style('pointer-events', 'none');
+    }
   }
 
   container.style.position = 'relative';
@@ -863,8 +997,38 @@ function buildElevationChart(zoomDomain) {
         event.stopPropagation();
         if (!p.fixed && confirm(`Rimuovere il punto ${idx + 1} (${p.distKm.toFixed(2)} km)?`)) removeBreakpoint(p.id);
       });
-    grp.append('text').attr('y', markerY + 4).attr('text-anchor', 'middle').attr('font-size', '10px').attr('font-weight', '700').attr('fill', '#fff').text(idx + 1).style('pointer-events', 'none');
+    grp.append('text').attr('y', markerY + 4).attr('text-anchor', 'middle').attr('font-size', '10px').attr('font-weight', '700')
+      .style('fill', '#ffffff').style('pointer-events', 'none').text(idx + 1);
   });
+
+  // ── Etichette con il valore (numero) di ogni sezione, distanza, tempo previsto e velocità media, tra un punto e l'altro ──
+  const segG = chartG.append('g');
+  const segLabelY = 46;
+  for (let i = 1; i < points.length; i++) {
+    const from = points[i - 1], to = points[i];
+    if (to.distKm <= d0 || from.distKm >= d1) continue;
+    const segFrom = Math.max(from.distKm, d0);
+    const segTo = Math.min(to.distKm, d1);
+    const xMid = (xScale(segFrom) + xScale(segTo)) / 2;
+    const pxWidth = xScale(segTo) - xScale(segFrom);
+    if (pxWidth < 46) continue; // spazio troppo stretto per un'etichetta leggibile
+    const distanceKm = to.distKm - from.distKm;
+    const speed = to.speed || 0;
+    const timeHours = speed > 0 ? distanceKm / speed : 0;
+    const lg = segG.append('g').attr('transform', `translate(${xMid},${segLabelY})`);
+    const numT = lg.append('text').attr('text-anchor', 'middle').attr('y', 0)
+      .attr('font-size', '12px').attr('font-weight', '800').style('fill', '#475569').style('pointer-events', 'none').text(i);
+    const distT = lg.append('text').attr('text-anchor', 'middle').attr('y', 12)
+      .attr('font-size', '9.5px').attr('font-weight', '600').style('fill', '#94a3b8').style('pointer-events', 'none').text(`${distanceKm.toFixed(1)} km`);
+    const timeT = lg.append('text').attr('text-anchor', 'middle').attr('y', 23)
+      .attr('font-size', '9.5px').attr('font-weight', '600').style('fill', '#94a3b8').style('pointer-events', 'none').text(formatTime(timeHours));
+    const speedT = lg.append('text').attr('text-anchor', 'middle').attr('y', 34)
+      .attr('font-size', '9.5px').attr('font-weight', '600').style('fill', '#94a3b8').style('pointer-events', 'none').text(`${speed.toFixed(1)} km/h`);
+    const bbox = lg.node().getBBox();
+    lg.insert('rect', 'text')
+      .attr('x', bbox.x - 6).attr('y', bbox.y - 3).attr('width', bbox.width + 12).attr('height', bbox.height + 6)
+      .attr('rx', 7).attr('fill', '#ffffff').attr('fill-opacity', 0.82).attr('stroke', '#e5e7eb').attr('stroke-width', 1);
+  }
 
   // ── Tooltip hover ──
   let tooltip = document.getElementById('elev-hover-tooltip');
@@ -1192,6 +1356,9 @@ function updateComputedOnly() {
   const tfootCumSpeed = document.getElementById('tfoot-cumspeed');
   if (tfootCumSpeed) tfootCumSpeed.textContent = last.cumAvgSpeed.toFixed(1) + ' km/h';
   renderStats(sections);
+  // Le etichette di sezione sul grafico (tempo/velocità previsti) dipendono
+  // dalla velocità impostata: ricostruiamo il grafico mantenendo lo zoom attivo.
+  buildElevationChart(window._currentZoomDomain);
 }
 
 function refreshAll() {
