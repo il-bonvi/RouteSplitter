@@ -202,7 +202,7 @@ input[type="file"] { display:none; }
    ═══════════════════════════════════════════════════════ */
 .report-view { display: none; width: 700px; margin: 0 auto; }
 .report-view.exporting { display:block !important; position:fixed; top:0; left:-10000px; background:#fff; padding:16px; z-index:-1; }
-.report-view #map { height:220px; width:100%; border-radius:10px; margin-bottom:14px; }
+.report-view #map { width:100%; height:100%; border-radius:10px; }
 .report-view .leaflet-control-container { display:none !important; }
 .report-header { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; border-bottom:2px solid #111827; padding-bottom:10px; margin-bottom:14px; }
 .report-header h1 { font-size:1.4rem; margin:0 0 4px 0; color:#111827; font-family:'Outfit',sans-serif; }
@@ -212,8 +212,10 @@ input[type="file"] { display:none; }
 .report-stats .rs-item { display:flex; flex-direction:column; gap:2px; }
 .report-stats .rs-label { color:#6b7280; font-size:0.68rem; text-transform:uppercase; letter-spacing:0.03em; }
 .report-stats .rs-value { font-weight:700; color:#111827; font-size:0.95rem; font-family:'JetBrains Mono',monospace; }
-#reportMap { margin-bottom: 14px; }
-#reportChart { margin-bottom:18px; }
+#reportMap { margin-bottom: 14px; width:100%; height:260px; overflow:hidden; position:relative; border-radius:10px; break-inside:avoid; page-break-inside:avoid; }
+#reportChart { margin-bottom:18px; break-inside:avoid; page-break-inside:avoid; }
+.report-header, .report-stats { break-inside:avoid; page-break-inside:avoid; }
+.report-table tr { break-inside:avoid; page-break-inside:avoid; }
 .report-table { width:100%; border-collapse:collapse; font-size:0.68rem; border:1.5px solid #6b7280; }
 .report-table th, .report-table td { border:1px solid #9ca3af; padding:5px 6px; text-align:center; }
 .report-table thead th { background:#e5e7eb; font-weight:700; color:#1f2937; border-bottom:2px solid #4b5563; }
@@ -283,7 +285,7 @@ input[type="file"] { display:none; }
         <input type="file" id="importSectionsInput" accept="application/json,.json" style="display:none"/>
       </div>
 
-      <div class="panel">
+      <div class="panel" id="elevChartPanel">
         <div class="gradient-legend">
           <div style="display:flex;gap:2rem;align-items:center;flex-wrap:wrap;width:100%;justify-content:space-between;">
             <div style="display:flex;gap:1.6rem;align-items:center;flex-wrap:wrap;">
@@ -348,6 +350,7 @@ let _hoverMapMarker = null;
 let _zoomStartMarker = null;
 let _zoomEndMarker = null;
 let _smoothingWindow = 5;
+let _mapTileLayers = null; // riferimento ai layer tile (light/dark), popolato da initMap, serve per l'export ad alta risoluzione
 window._currentZoomDomain = null;
 
 // ═══════════════════════════════════════════════════════
@@ -382,6 +385,7 @@ function flashMessage(msg) {
 
 // ── Colori pendenza — identici a gara.html ──
 function getGradientColor(gradient) {
+  if (!Number.isFinite(gradient)) gradient = 0; // valore non valido (es. punti GPX duplicati) → pendenza neutra invece di un colore rotto
   const g = Math.max(-20, Math.min(20, gradient));
   if (g < -15) { const t = (g + 20) / 5; return interpolateColor('#0f172a', '#1e3a8a', t); }
   if (g < -10) { const t = (g + 15) / 5; return interpolateColor('#1e3a8a', '#3b82f6', t); }
@@ -752,116 +756,6 @@ document.getElementById('importSectionsInput').addEventListener('change', (e) =>
 // REPORT STAMPABILE — mini-report PDF per l'atleta
 // ═══════════════════════════════════════════════════════
 
-// Grafico altimetria semplificato e statico per il report: stesso stile
-// cromatico del grafico principale, ma senza zoom/tooltip/interazioni,
-// con i soli punti di sezione numerati.
-function buildReportChart(container) {
-  container.innerHTML = '';
-  const pts = routeData.points;
-  const totalW = 900, totalH = 270;
-  const margin = { top: 20, right: 20, bottom: 36, left: 55 };
-  const W = totalW - margin.left - margin.right;
-  const H = totalH - margin.top - margin.bottom;
-
-  const ptDistances = pts.map(p => p.dist);
-  const smEleFull = smoothByDistance(pts.map(p => p.ele), ptDistances, smoothingRadiusMeters());
-  const fullData = pts.map((p, i) => ({ dist: p.dist / 1000, ele: p.ele, eleSmooth: smEleFull[i] }));
-
-  const rawG = [0];
-  for (let i = 1; i < pts.length; i++) {
-    const dDist = pts[i].dist - pts[i - 1].dist;
-    const dEle = pts[i].ele - pts[i - 1].ele;
-    rawG.push(dDist > 0 ? (dEle / dDist) * 100 : 0);
-  }
-  const smG = smoothByDistance(rawG, ptDistances, smoothingRadiusMeters());
-
-  const fullMaxDist = d3.max(fullData, d => d.dist);
-  const xScale = d3.scaleLinear().domain([0, fullMaxDist]).range([0, W]);
-
-  // Stesso criterio di headroom del grafico interattivo, per lasciare spazio alle etichette di sezione
-  const elevations = fullData.map(d => d.eleSmooth);
-  const minEle = Math.min(...elevations);
-  const maxEle = Math.max(...elevations);
-  const elevationGain = maxEle - minEle;
-  const paddingTop = 210;
-  const paddingBottom = minEle >= 100 ? 60 : Math.max(0, minEle * 0.4);
-  const rangeY_base = Math.max(elevationGain * 1.5, elevationGain + 210);
-  const rangeY_final = rangeY_base + paddingBottom + paddingTop;
-  const roundTo = 50;
-  const yMin = Math.floor((minEle - paddingBottom) / roundTo) * roundTo;
-  const yMaxRaw = Math.ceil((yMin + rangeY_final) / roundTo) * roundTo;
-  const yMaxCap = Math.ceil((maxEle + paddingTop) / roundTo) * roundTo;
-  const yMax = Math.min(yMaxRaw, yMaxCap);
-  const yScale = d3.scaleLinear().domain([Math.max(0, yMin), yMax]).range([H, 0]);
-
-  const svg = d3.select(container).append('svg')
-    .attr('viewBox', `0 0 ${totalW} ${totalH}`)
-    .attr('preserveAspectRatio', 'xMidYMid meet')
-    .style('width', '100%').style('height', 'auto').style('display', 'block');
-
-  const g = svg.append('g').attr('transform', `translate(${margin.left},${margin.top})`);
-
-  const xAxisG = g.append('g').attr('transform', `translate(0,${H})`);
-  xAxisG.call(d3.axisBottom(xScale).ticks(8).tickFormat(d => d.toFixed(0) + ' km')).selectAll('text').style('font-size', '9px');
-  const yAxisG = g.append('g');
-  yAxisG.call(d3.axisLeft(yScale).ticks(5).tickFormat(d => d + ' m')).selectAll('text').style('font-size', '9px');
-  g.selectAll('.domain').style('stroke', '#9ca3af');
-  g.selectAll('.tick line').style('stroke', '#9ca3af');
-
-  const gridG = g.append('g');
-  gridG.call(d3.axisLeft(yScale).ticks(5).tickSize(-W).tickFormat('')).selectAll('line').style('stroke', '#e5e7eb').style('stroke-dasharray', '2,2');
-  gridG.select('.domain').remove();
-
-  function getGradientAtDist(targetDist) {
-    let lo = 0, hi = fullData.length - 1;
-    while (lo < hi - 1) { const mid = (lo + hi) >> 1; if (fullData[mid].dist < targetDist) lo = mid; else hi = mid; }
-    const closest = Math.abs(fullData[lo].dist - targetDist) < Math.abs(fullData[hi].dist - targetDist) ? lo : hi;
-    return smG[closest];
-  }
-
-  for (let i = 1; i < fullData.length; i++) {
-    const p1 = fullData[i - 1], p2 = fullData[i];
-    const color = getGradientColor(getGradientAtDist(p2.dist));
-    const path = `M${xScale(p1.dist)},${yScale(p1.eleSmooth)} L${xScale(p2.dist)},${yScale(p2.eleSmooth)} L${xScale(p2.dist)},${H} L${xScale(p1.dist)},${H} Z`;
-    g.append('path').attr('d', path).attr('fill', color).attr('opacity', 0.65);
-  }
-
-  // Punti di sezione numerati
-  const markerY = 18;
-  points.forEach((p, idx) => {
-    const x = xScale(p.distKm);
-    const color = markerColor(p.fixed);
-    const grp = g.append('g').attr('transform', `translate(${x},0)`);
-    grp.append('line').attr('y1', 0).attr('y2', H).attr('stroke', color).attr('stroke-dasharray', '3,3').attr('stroke-width', 1.2).attr('opacity', 0.8);
-    grp.append('circle').attr('cy', markerY).attr('r', 8).attr('fill', color).attr('stroke', '#fff').attr('stroke-width', 1.5);
-    grp.append('text').attr('y', markerY + 3.2).attr('text-anchor', 'middle').attr('font-size', '9px').attr('font-weight', '800').style('fill', '#ffffff').text(idx + 1);
-  });
-
-  // Etichette con numero sezione, distanza, tempo previsto e velocità media (stesso stile del grafico interattivo)
-  const segLabelY = 40;
-  for (let i = 1; i < points.length; i++) {
-    const from = points[i - 1], to = points[i];
-    const xMid = (xScale(from.distKm) + xScale(to.distKm)) / 2;
-    const pxWidth = xScale(to.distKm) - xScale(from.distKm);
-    if (pxWidth < 46) continue;
-    const distanceKm = to.distKm - from.distKm;
-    const speed = to.speed || 0;
-    const timeHours = speed > 0 ? distanceKm / speed : 0;
-    const lg = g.append('g').attr('transform', `translate(${xMid},${segLabelY})`);
-    lg.append('text').attr('text-anchor', 'middle').attr('y', 0)
-      .attr('font-size', '11px').attr('font-weight', '800').style('fill', '#475569').text(i);
-    lg.append('text').attr('text-anchor', 'middle').attr('y', 11)
-      .attr('font-size', '8.5px').attr('font-weight', '600').style('fill', '#94a3b8').text(`${distanceKm.toFixed(1)} km`);
-    lg.append('text').attr('text-anchor', 'middle').attr('y', 21)
-      .attr('font-size', '8.5px').attr('font-weight', '600').style('fill', '#94a3b8').text(formatTime(timeHours));
-    lg.append('text').attr('text-anchor', 'middle').attr('y', 31)
-      .attr('font-size', '8.5px').attr('font-weight', '600').style('fill', '#94a3b8').text(`${speed.toFixed(1)} km/h`);
-    const bbox = lg.node().getBBox();
-    lg.insert('rect', 'text')
-      .attr('x', bbox.x - 5).attr('y', bbox.y - 2.5).attr('width', bbox.width + 10).attr('height', bbox.height + 5)
-      .attr('rx', 6).attr('fill', '#ffffff').attr('fill-opacity', 0.85).attr('stroke', '#e5e7eb').attr('stroke-width', 1);
-  }
-}
 
 function buildReport() {
   if (!routeData || points.length < 2) { alert('Carica prima un percorso e definisci le sezioni.'); return; }
@@ -944,50 +838,185 @@ function buildReport() {
     </table>
     <div class="report-footer">Generato con RouteSplitter — © 2026 Andrea Bonvicin</div>
   `;
-  buildReportChart(document.getElementById('reportChart'));
 }
 
-// ── Esportazione: usa la mappa Leaflet reale (non solo la planimetria vettoriale) ──
-// La spostiamo temporaneamente dentro il report, fuori schermo, per lasciare che
-// Leaflet calcoli le dimensioni corrette e le tile carichino, poi stampiamo.
+// ── Esportazione: usa la mappa Leaflet reale E il grafico altimetria reale ──
+// (non reimplementazioni separate) spostandoli temporaneamente dentro il report,
+// così il render è sempre identico a quello della webapp, poi li rimettiamo al loro posto.
+// ── Mappa statica ad alta risoluzione per il report PDF ──────────────────
+// Invece di spostare/ridimensionare la mappa Leaflet interattiva (fragile: dipende
+// da animazioni di zoom/pan e dal timing del caricamento delle tile), disegniamo
+// noi stessi le tile OSM e il tracciato su un <canvas> a risoluzione scelta da noi.
+// Così il risultato è sempre nitido, indipendentemente da cosa succede a schermo.
+async function buildStaticMapImage(pxWidth, pxHeight) {
+  const bounds = window._routeBounds;
+  if (!bounds || !routeData) return null;
+
+  const crs = L.CRS.EPSG3857;
+  const project = (lat, lon, zoom) => crs.latLngToPoint(L.latLng(lat, lon), zoom);
+  const PADDING = 24; // margine interno, in px, alla risoluzione target
+
+  let zoom = 18;
+  for (; zoom >= 1; zoom--) {
+    const nw = project(bounds.getNorth(), bounds.getWest(), zoom);
+    const se = project(bounds.getSouth(), bounds.getEast(), zoom);
+    if (Math.abs(se.x - nw.x) <= (pxWidth - PADDING * 2) && Math.abs(se.y - nw.y) <= (pxHeight - PADDING * 2)) break;
+  }
+
+  const nw = project(bounds.getNorth(), bounds.getWest(), zoom);
+  const se = project(bounds.getSouth(), bounds.getEast(), zoom);
+  const bboxW = se.x - nw.x, bboxH = se.y - nw.y;
+  const originX = nw.x - (pxWidth - bboxW) / 2;
+  const originY = nw.y - (pxHeight - bboxH) / 2;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = pxWidth; canvas.height = pxHeight;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#e5e3df';
+  ctx.fillRect(0, 0, pxWidth, pxHeight);
+
+  const isDark = localStorage.getItem('routesplitter-map-style') === 'dark';
+  const TILE = 256;
+  const firstTx = Math.floor(originX / TILE), lastTx = Math.floor((originX + pxWidth) / TILE);
+  const firstTy = Math.floor(originY / TILE), lastTy = Math.floor((originY + pxHeight) / TILE);
+  const maxIdx = Math.pow(2, zoom) - 1;
+  const subs = ['a', 'b', 'c'];
+
+  const loadImg = (url) => new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = url;
+  });
+
+  const jobs = [];
+  for (let tx = firstTx; tx <= lastTx; tx++) {
+    for (let ty = firstTy; ty <= lastTy; ty++) {
+      if (tx < 0 || ty < 0 || tx > maxIdx || ty > maxIdx) continue;
+      const sub = subs[Math.abs(tx + ty * 3) % subs.length];
+      const url = `https://${sub}.tile.openstreetmap.org/${zoom}/${tx}/${ty}.png`;
+      jobs.push(loadImg(url).then(img => ({ img, tx, ty })));
+    }
+  }
+  const tiles = await Promise.all(jobs);
+
+  if (isDark) ctx.filter = 'invert(100%) hue-rotate(180deg) brightness(0.95) contrast(0.9)';
+  tiles.forEach(({ img, tx, ty }) => {
+    if (!img) return;
+    ctx.drawImage(img, tx * TILE - originX, ty * TILE - originY, TILE, TILE);
+  });
+  ctx.filter = 'none';
+
+  // Tracciato colorato per pendenza — stesso identico algoritmo della mappa live
+  const gradients = routeData.points.map(p => p.gradient);
+  const distances = routeData.points.map(p => p.dist);
+  const smoothed = smoothByDistance(gradients, distances, smoothingRadiusMeters());
+  const scaleFactor = pxWidth / 700;
+  ctx.lineWidth = 4 * scaleFactor;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  for (let i = 1; i < routeData.points.length; i++) {
+    const p1 = routeData.points[i - 1], p2 = routeData.points[i];
+    const pt1 = project(p1.lat, p1.lon, zoom), pt2 = project(p2.lat, p2.lon, zoom);
+    ctx.strokeStyle = getGradientColor(smoothed[i]);
+    ctx.beginPath();
+    ctx.moveTo(pt1.x - originX, pt1.y - originY);
+    ctx.lineTo(pt2.x - originX, pt2.y - originY);
+    ctx.stroke();
+  }
+
+  // Marker numerati (partenza / arrivo / punti intermedi)
+  points.forEach((p, i) => {
+    const rp = getInterpolatedPoint(p.distKm);
+    const pt = project(rp.lat, rp.lon, zoom);
+    const x = pt.x - originX, y = pt.y - originY;
+    const r = 11 * scaleFactor;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fillStyle = markerColor(p.fixed);
+    ctx.fill();
+    ctx.lineWidth = 2 * scaleFactor;
+    ctx.strokeStyle = '#fff';
+    ctx.stroke();
+    ctx.fillStyle = '#fff';
+    ctx.font = `800 ${12 * scaleFactor}px Inter, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(String(i + 1), x, y + scaleFactor);
+  });
+
+  try {
+    return canvas.toDataURL('image/png');
+  } catch (err) {
+    console.error('Impossibile esportare la mappa come immagine (probabile blocco CORS delle tile):', err);
+    return null;
+  }
+}
+
 function exportReportPDF() {
   if (!routeData || points.length < 2) { alert('Carica prima un percorso e definisci le sezioni.'); return; }
-  if (!map) { alert('Mappa non pronta, riprova tra un istante.'); return; }
   buildReport();
 
   const reportView = document.getElementById('reportView');
-  const mapDiv = document.getElementById('map');
-  const mapWrap = document.getElementById('reportMap');
-  mapWrap.innerHTML = '';
-  mapWrap.appendChild(mapDiv);
+
+  // Grafico altimetria: usiamo il vero elemento interattivo (stesso identico rendering della
+  // webapp). Se era zoomato, resettiamo alla vista completa per il report e la ripristiniamo dopo.
+  const chartDiv = document.getElementById('elevation-chart');
+  const chartWrap = document.getElementById('reportChart');
+  window._reportPrevZoomDomain = window._currentZoomDomain || null;
+  if (window._reportPrevZoomDomain) buildElevationChart(null);
+  chartWrap.innerHTML = '';
+  chartWrap.appendChild(chartDiv);
 
   window._reportExportInProgress = true;
+  window._originalDocTitle = document.title;
+  const safeTitle = (document.getElementById('routeName').value || 'RouteSplitter').trim();
+  document.title = safeTitle; // Chrome/Edge usano document.title come nome file suggerito per "Salva come PDF"
   reportView.classList.add('exporting');
-  setTimeout(() => {
-    map.invalidateSize();
-    if (window._routeBounds) map.fitBounds(window._routeBounds, { padding: [20, 20] });
-    // attesa aggiuntiva per il caricamento delle tile dopo il resize
-    setTimeout(() => {
-      reportView.classList.remove('exporting'); // torna in flusso normale: il CSS @media print lo rende visibile in stampa
-      window.print();
-      // rete di sicurezza: se 'afterprint' non scattasse in qualche browser, ripristiniamo comunque
-      setTimeout(restoreMapAfterReport, 4000);
-    }, 700);
-  }, 80);
+
+  const mapWrap = document.getElementById('reportMap');
+  mapWrap.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#9ca3af;font-size:0.75rem;">Generazione mappa…</div>';
+
+  const EXPORT_SCALE = 3; // fattore di sovracampionamento: 3x la risoluzione "a schermo" per una stampa nitida
+  const rect = mapWrap.getBoundingClientRect();
+  const targetW = Math.round((rect.width || 668) * EXPORT_SCALE);
+  const targetH = Math.round((rect.height || 260) * EXPORT_SCALE);
+
+  const finishExport = () => {
+    reportView.classList.remove('exporting'); // torna in flusso normale: il CSS @media print lo rende visibile in stampa
+    window.print();
+    setTimeout(restoreMapAfterReport, 1500);
+  };
+
+  buildStaticMapImage(targetW, targetH).then(dataUrl => {
+    mapWrap.innerHTML = '';
+    if (dataUrl) {
+      const img = document.createElement('img');
+      img.src = dataUrl;
+      img.style.cssText = 'width:100%;height:100%;object-fit:cover;border-radius:10px;display:block;';
+      mapWrap.appendChild(img);
+    } else {
+      mapWrap.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#9ca3af;font-size:0.75rem;">Mappa non disponibile</div>';
+    }
+    finishExport();
+  }).catch(err => {
+    console.error('Errore nella generazione della mappa per il report:', err);
+    mapWrap.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#9ca3af;font-size:0.75rem;">Mappa non disponibile</div>';
+    finishExport();
+  });
 }
 
 function restoreMapAfterReport() {
   if (!window._reportExportInProgress) return;
   window._reportExportInProgress = false;
+  if (window._originalDocTitle) { document.title = window._originalDocTitle; }
   document.getElementById('reportView').classList.remove('exporting');
-  const mapDiv = document.getElementById('map');
-  const mapPanel = document.getElementById('mapPanel');
-  if (mapDiv && mapPanel && mapDiv.parentElement !== mapPanel) {
-    mapPanel.appendChild(mapDiv);
-    if (map) setTimeout(() => {
-      map.invalidateSize();
-      if (window._routeBounds) map.fitBounds(window._routeBounds, { padding: [40, 40] });
-    }, 60);
+  const chartDiv = document.getElementById('elevation-chart');
+  const chartPanel = document.getElementById('elevChartPanel');
+  if (chartDiv && chartPanel && chartDiv.parentElement !== chartPanel) {
+    chartPanel.appendChild(chartDiv);
+    buildElevationChart(window._reportPrevZoomDomain || null);
   }
 }
 window.addEventListener('afterprint', restoreMapAfterReport);
@@ -1028,6 +1057,7 @@ function initMap() {
     light: L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: OSM_ATTR, maxZoom: 19 }),
     dark:  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: OSM_ATTR, maxZoom: 19, className: 'tiles-invert' })
   };
+  _mapTileLayers = tileLayers;
   const applyMapStyle = (id) => {
     Object.values(tileLayers).forEach(l => { if (map.hasLayer(l)) map.removeLayer(l); });
     tileLayers[id].addTo(map);
