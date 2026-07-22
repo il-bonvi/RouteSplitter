@@ -208,25 +208,33 @@ input[type="file"] { display:none; }
 .report-header h1 { font-size:1.4rem; margin:0 0 4px 0; color:#111827; font-family:'Outfit',sans-serif; }
 .report-header .report-sub { font-size:0.8rem; color:#4b5563; }
 .report-header .report-date { font-size:0.72rem; color:#9ca3af; text-align:right; white-space:nowrap; }
-.report-stats { display:flex; gap:18px; flex-wrap:wrap; margin-bottom:16px; font-size:0.78rem; }
-.report-stats .rs-item { display:flex; flex-direction:column; gap:2px; }
-.report-stats .rs-label { color:#6b7280; font-size:0.68rem; text-transform:uppercase; letter-spacing:0.03em; }
-.report-stats .rs-value { font-weight:700; color:#111827; font-size:0.95rem; font-family:'JetBrains Mono',monospace; }
+.report-stats { display:flex; align-items:baseline; flex-wrap:wrap; gap:0; margin-bottom:10px; font-size:0.72rem; white-space:nowrap; }
+.report-stats .rs-item { display:inline-flex; align-items:baseline; gap:3px; }
+.report-stats .rs-sep { color:#d1d5db; margin:0 8px; font-size:0.7rem; }
+.report-stats .rs-label { color:#6b7280; font-size:0.62rem; text-transform:uppercase; letter-spacing:0.02em; }
+.report-stats .rs-value { font-weight:700; color:#111827; font-size:0.72rem; font-family:'JetBrains Mono',monospace; }
 #reportMap { margin-bottom: 14px; width:100%; height:260px; overflow:hidden; position:relative; border-radius:10px; break-inside:avoid; page-break-inside:avoid; }
 #reportChart { margin-bottom:18px; break-inside:avoid; page-break-inside:avoid; }
 .report-header, .report-stats { break-inside:avoid; page-break-inside:avoid; }
 .report-table tr { break-inside:avoid; page-break-inside:avoid; }
-.report-table { width:100%; border-collapse:collapse; font-size:0.68rem; border:1.5px solid #6b7280; }
-.report-table th, .report-table td { border:1px solid #9ca3af; padding:5px 6px; text-align:center; }
+.report-table { width:100%; border-collapse:collapse; font-size:0.68rem; border:1.5px solid #6b7280; -webkit-print-color-adjust:exact; print-color-adjust:exact; color-adjust:exact; }
+.report-table th, .report-table td { border:1px solid #9ca3af; padding:5px 6px; text-align:center; color:#111827; }
 .report-table thead th { background:#e5e7eb; font-weight:700; color:#1f2937; border-bottom:2px solid #4b5563; }
 .report-table tbody tr { border-bottom:1.5px solid #6b7280; }
-.report-table td.rt-name { text-align:left; font-weight:600; }
+.report-table td.rt-name { font-weight:600; }
+.report-table tbody td:nth-child(4), .report-table tbody td:nth-child(5), .report-table tbody td:nth-child(6) { background:#eef4fc; }
+.report-table tbody td:nth-child(7), .report-table tbody td:nth-child(8), .report-table tbody td:nth-child(9) { background:#fdf3e8; }
+.report-table tbody td:nth-child(10), .report-table tbody td:nth-child(11) { background:#eef7ee; }
+.report-table thead th:nth-child(4), .report-table thead th:nth-child(5), .report-table thead th:nth-child(6) { background:#dde9f8; }
+.report-table thead th:nth-child(7), .report-table thead th:nth-child(8), .report-table thead th:nth-child(9) { background:#faead4; }
+.report-table thead th:nth-child(10), .report-table thead th:nth-child(11) { background:#dcefdc; }
 .report-table tfoot td { font-weight:700; background:#f3f4f6; border-top:2px solid #4b5563; }
 .report-footer { margin-top:14px; font-size:0.65rem; color:#9ca3af; text-align:center; }
 
 @media print {
   body > *:not(.report-view) { display:none !important; }
-  .report-view { display:block !important; }
+  .report-view { display:block !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; color-adjust:exact; }
+  .report-view * { -webkit-print-color-adjust:exact; print-color-adjust:exact; color-adjust:exact; }
   @page { margin: 14mm; }
 }
 </style>
@@ -539,7 +547,7 @@ function processRoute(rawPoints, fileName) {
 
   points = [
     { id: 1, distKm: 0, fixed: 'start', sectionLabel: null, speed: null },
-    { id: 2, distKm: routeData.distanceKm, fixed: 'finish', sectionLabel: 'Sezione 1', speed: parseFloat(document.getElementById('defaultSpeed').value) || 40 }
+    { id: 2, distKm: routeData.distanceKm, fixed: 'finish', sectionLabel: 'S1', speed: parseFloat(document.getElementById('defaultSpeed').value) || 40 }
   ];
   nextId = 3;
 
@@ -638,8 +646,8 @@ function adjustBreakpoint(id, deltaM) {
 function renumberSections() {
   let n = 1;
   for (let i = 1; i < points.length; i++) {
-    if (points[i].sectionLabel === 'Sezione' || points[i].sectionLabel === null || /^Sezione \d+$/.test(points[i].sectionLabel)) {
-      points[i].sectionLabel = `Sezione ${n}`;
+    if (points[i].sectionLabel === 'Sezione' || points[i].sectionLabel === null || /^Sezione \d+$/.test(points[i].sectionLabel) || /^S\d+$/.test(points[i].sectionLabel)) {
+      points[i].sectionLabel = `S${n}`;
     }
     n++;
   }
@@ -650,7 +658,7 @@ document.getElementById('resetPointsBtn').addEventListener('click', () => {
   const finishSpeed = points[points.length - 1].speed;
   points = [
     { id: 1, distKm: 0, fixed: 'start', sectionLabel: null, speed: null },
-    { id: 2, distKm: routeData.distanceKm, fixed: 'finish', sectionLabel: 'Sezione 1', speed: finishSpeed || parseFloat(document.getElementById('defaultSpeed').value) || 40 }
+    { id: 2, distKm: routeData.distanceKm, fixed: 'finish', sectionLabel: 'S1', speed: finishSpeed || parseFloat(document.getElementById('defaultSpeed').value) || 40 }
   ];
   nextId = 3;
   refreshAll();
@@ -776,7 +784,7 @@ function buildReport() {
   }
 
   const rows = sections.map(s => {
-    const name = s.to.sectionLabel || `Sezione ${s.index}`;
+    const name = s.to.sectionLabel || `S${s.index}`;
     const clock = clockTimeAfter(s.cumTime);
     return `
       <tr>
@@ -801,15 +809,11 @@ function buildReport() {
         <h1>${routeName}</h1>
       </div>
       <div class="report-date">
-        Generato il ${new Date().toLocaleDateString('it-IT')}${startTimeStr ? `<br/>Partenza ore ${startTimeStr}` : ''}
+        Created ${new Date().toLocaleDateString('it-IT')}${startTimeStr ? `<br/>Partenza ore ${startTimeStr}` : ''}
       </div>
     </div>
     <div class="report-stats">
-      <div class="rs-item"><span class="rs-label">Distanza totale</span><span class="rs-value">${routeData.distanceKm.toFixed(2)} km</span></div>
-      <div class="rs-item"><span class="rs-label">Dislivello +</span><span class="rs-value">${Math.round(totalGain)} m</span></div>
-      <div class="rs-item"><span class="rs-label">Dislivello −</span><span class="rs-value">${Math.round(totalLoss)} m</span></div>
-      <div class="rs-item"><span class="rs-label">Tempo previsto</span><span class="rs-value">${formatTime(totalTime)}</span></div>
-      <div class="rs-item"><span class="rs-label">Vel. media finale</span><span class="rs-value">${finalAvgSpeed.toFixed(1)} km/h</span></div>
+      <span class="rs-item"><span class="rs-label">dist</span><span class="rs-value">${routeData.distanceKm.toFixed(2)}km</span></span><span class="rs-sep">·</span><span class="rs-item"><span class="rs-label">D+</span><span class="rs-value">${Math.round(totalGain)}m</span></span><span class="rs-sep">·</span><span class="rs-item"><span class="rs-label">D−</span><span class="rs-value">${Math.round(totalLoss)}m</span></span><span class="rs-sep">·</span><span class="rs-item"><span class="rs-label">tempo</span><span class="rs-value">${formatTime(totalTime)}</span></span><span class="rs-sep">·</span><span class="rs-item"><span class="rs-label">avg spd</span><span class="rs-value">${finalAvgSpeed.toFixed(1)}km/h</span></span>
     </div>
     <div id="reportMap"></div>
     <div id="reportChart"></div>
@@ -834,7 +838,7 @@ function buildReport() {
         </tr>
       </tfoot>
     </table>
-    <div class="report-footer">Generato con RouteSplitter — © 2026 Andrea Bonvicin</div>
+    <div class="report-footer">Generated by RouteSplitter — © 2026 Andrea Bonvicin</div>
   `;
 }
 
@@ -929,16 +933,16 @@ async function buildStaticMapImage(pxWidth, pxHeight) {
     const rp = getInterpolatedPoint(p.distKm);
     const pt = project(rp.lat, rp.lon, zoom);
     const x = pt.x - originX, y = pt.y - originY;
-    const r = 11 * scaleFactor;
+    const r = 4 * scaleFactor;
     ctx.beginPath();
     ctx.arc(x, y, r, 0, Math.PI * 2);
     ctx.fillStyle = markerColor(p.fixed);
     ctx.fill();
-    ctx.lineWidth = 2 * scaleFactor;
+    ctx.lineWidth = 1 * scaleFactor;
     ctx.strokeStyle = '#fff';
     ctx.stroke();
     ctx.fillStyle = '#fff';
-    ctx.font = `800 ${12 * scaleFactor}px Inter, sans-serif`;
+    ctx.font = `800 ${5.5 * scaleFactor}px Inter, sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(String(i + 1), x, y + scaleFactor);
