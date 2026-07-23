@@ -217,7 +217,7 @@ input[type="file"] { display:none; }
 #reportChart { margin-bottom:18px; break-inside:avoid; page-break-inside:avoid; }
 .report-header, .report-stats { break-inside:avoid; page-break-inside:avoid; }
 .report-table tr { break-inside:avoid; page-break-inside:avoid; }
-.report-table { width:100%; border-collapse:collapse; font-size:0.68rem; border:1.5px solid #6b7280; -webkit-print-color-adjust:exact; print-color-adjust:exact; color-adjust:exact; }
+.report-table { width:100%; border-collapse:collapse; font-size:0.68rem; border:1.5px solid #6b7280; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
 .report-table th, .report-table td { border:1px solid #9ca3af; padding:5px 6px; text-align:center; color:#111827; }
 .report-table thead th { background:#e5e7eb; font-weight:700; color:#1f2937; border-bottom:2px solid #4b5563; }
 .report-table tbody tr { border-bottom:1.5px solid #6b7280; }
@@ -233,8 +233,8 @@ input[type="file"] { display:none; }
 
 @media print {
   body > *:not(.report-view) { display:none !important; }
-  .report-view { display:block !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; color-adjust:exact; }
-  .report-view * { -webkit-print-color-adjust:exact; print-color-adjust:exact; color-adjust:exact; }
+  .report-view { display:block !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  .report-view * { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
   @page { margin: 14mm; }
 }
 </style>
@@ -646,7 +646,7 @@ function adjustBreakpoint(id, deltaM) {
 function renumberSections() {
   let n = 1;
   for (let i = 1; i < points.length; i++) {
-    if (points[i].sectionLabel === 'Sezione' || points[i].sectionLabel === null || /^Sezione \d+$/.test(points[i].sectionLabel) || /^S\d+$/.test(points[i].sectionLabel)) {
+    if (points[i].sectionLabel === 'Sezione' || points[i].sectionLabel === null || /^S\d+$/.test(points[i].sectionLabel)) {
       points[i].sectionLabel = `S${n}`;
     }
     n++;
