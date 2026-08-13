@@ -93,6 +93,21 @@ input[type="file"] { display:none; }
 .stat-card.avgspeed .value { color: var(--accent2); }
 .stat-card.dist .value { color: var(--accent); }
 
+.physics-panel{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:14px 16px;margin-bottom:16px}
+.physics-panel .phys-title{font-size:.72rem;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.physics-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px}
+.phys-field{display:flex;flex-direction:column;gap:4px}
+.phys-field label{font-size:.62rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.8px;font-family:'JetBrains Mono',monospace}
+.phys-field input{background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'JetBrains Mono',monospace;font-size:.82rem;padding:7px 8px;outline:none;width:100%}
+.phys-field input:focus{border-color:var(--accent)}
+.mode-toggle{display:inline-flex;background:var(--surface2);border-radius:8px;padding:2px;border:1px solid var(--border)}
+.mode-toggle button{background:transparent;border:none;color:var(--text-muted);font-family:'Outfit',sans-serif;font-size:.75rem;font-weight:600;padding:6px 12px;border-radius:6px;cursor:pointer;transition:.15s}
+.mode-toggle button.active{background:var(--accent);color:#0a0e1a}
+.phys-hint{font-size:.68rem;color:var(--text-muted);margin-top:8px;line-height:1.4}
+.cda-box,.pace-box{margin-top:12px;padding:12px;background:var(--surface2);border-radius:10px;border:1px solid var(--border)}
+.cda-box .cda-title,.pace-box .cda-title{font-size:.72rem;font-weight:600;color:var(--accent);margin-bottom:8px;text-transform:uppercase;letter-spacing:1px}
+.cda-result{font-family:'JetBrains Mono',monospace;font-size:1.05rem;font-weight:700;color:var(--accent4);margin-top:8px}
+
 .top-bar { display:flex; justify-content:space-between; align-items:center; gap:16px; flex-wrap:wrap; margin-bottom: 6px; }
 .route-name-input { background:transparent; border:none; border-bottom:1px solid var(--border); color: var(--text); font-size:1.3rem; font-weight:700; font-family:'Outfit',sans-serif; padding: 4px 2px; outline:none; min-width:220px; }
 .route-name-input:focus { border-color: var(--accent); }
@@ -237,6 +252,41 @@ input[type="file"] { display:none; }
   .report-view * { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
   @page { margin: 14mm; }
 }
+
+.power-modal-overlay {
+  display:none; position:fixed; inset:0; z-index:100000;
+  background:rgba(0,0,0,0.72); backdrop-filter:blur(4px);
+  align-items:center; justify-content:center; padding:20px;
+}
+.power-modal-overlay.open { display:flex; }
+.power-modal {
+  background:var(--surface); border:1px solid var(--border); border-radius:16px;
+  width:min(1100px, 96vw); max-height:92vh; overflow:auto;
+  box-shadow:0 20px 60px rgba(0,0,0,0.5); padding:18px 20px 24px;
+}
+.power-modal-header {
+  display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
+  margin-bottom:12px;
+}
+.power-modal-header h2 {
+  font-size:1.05rem; font-weight:700; margin:0; color:var(--text);
+}
+.power-modal-controls {
+  display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+}
+.power-modal-controls label { font-size:0.72rem; color:var(--text-muted); }
+.power-modal-controls select, .power-modal-controls input {
+  background:var(--surface2); border:1px solid var(--border); border-radius:8px;
+  color:var(--text); font-family:'JetBrains Mono',monospace; font-size:0.82rem; padding:6px 8px;
+}
+#powerPlanChart { width:100%; height:420px; background:#f8fafc; border-radius:12px; }
+.power-modal-legend {
+  display:flex; gap:16px; flex-wrap:wrap; margin-top:10px; font-size:0.75rem; color:var(--text-muted);
+}
+.power-modal-legend span i {
+  display:inline-block; width:18px; height:3px; border-radius:2px; vertical-align:middle; margin-right:6px;
+}
+
 </style>
 </head>
 <body>
@@ -272,6 +322,61 @@ input[type="file"] { display:none; }
 
     <div class="stats-row" id="statsRow"></div>
 
+    <div class="physics-panel" id="physicsPanel">
+      <div class="phys-title">
+        <span>Parametri fisici (Martin) — usati anche per stima CdA</span>
+        <div class="mode-toggle">
+          <button type="button" class="active" id="modeSpeedBtn">Velocità</button>
+          <button type="button" id="modePowerBtn">Potenza</button>
+        </div>
+        <button type="button" class="btn ghost" id="xferToSpeedBtn" title="Copia le velocità calcolate (da potenza) nei campi velocità">↓ Velocità</button>
+        <button type="button" class="btn ghost" id="xferToPowerBtn" title="Copia le potenze calcolate (da velocità) nei campi potenza">↓ Potenza</button>
+      </div>
+      <div class="physics-grid">
+        <div class="phys-field"><label>Peso ciclista (kg)</label><input type="number" id="phys-rider" value="70" step="0.1"/></div>
+        <div class="phys-field"><label>Peso bici+kit (kg)</label><input type="number" id="phys-bike" value="9" step="0.1"/></div>
+        <div class="phys-field"><label>CdA (m²)</label><input type="number" id="phys-cda" value="0.28" step="0.005"/></div>
+        <div class="phys-field"><label>Crr</label><input type="number" id="phys-crr" value="0.004" step="0.0001"/></div>
+        <div class="phys-field"><label>Densità aria</label><input type="number" id="phys-rho" value="1.1989" step="0.001"/></div>
+        <div class="phys-field"><label>Drivetrain loss %</label><input type="number" id="phys-dt" value="2" step="0.1"/></div>
+        <div class="phys-field"><label>Vento km/h (+testa)</label><input type="number" id="phys-wind" value="0" step="0.5"/></div>
+        <div class="phys-field" id="defaultPowerWrap" style="display:none"><label>Potenza default (W)</label><input type="number" id="defaultPower" value="250" step="1"/></div>
+      </div>
+      <p class="phys-hint"><strong>Velocità</strong>: inserisci km/h → vedi potenza richiesta. <strong>Potenza</strong>: inserisci watt → vedi velocità. Parametri sopra valgono per tutto (predizione e stima CdA).</p>
+      <div class="cda-box">
+        <div class="cda-title">↺ Stima CdA (usa peso, Crr, densità, drivetrain, vento sopra)</div>
+        <div class="physics-grid">
+          <div class="phys-field"><label>Velocità misurata (km/h)</label><input type="number" id="cda-speed" value="36" step="0.1"/></div>
+          <div class="phys-field"><label>Potenza media (W)</label><input type="number" id="cda-power" value="250" step="1"/></div>
+          <div class="phys-field"><label>Pendenza media (%)</label><input type="number" id="cda-grade" value="0" step="0.1"/></div>
+          <div class="phys-field" style="justify-content:flex-end"><label>&nbsp;</label>
+            <button class="btn" type="button" id="cdaEstimateBtn" style="width:100%;justify-content:center">Stima CdA</button></div>
+        </div>
+        <div class="cda-result" id="cdaResult">—</div>
+        <button class="btn ghost" type="button" id="cdaApplyBtn" style="margin-top:6px;display:none">Applica CdA</button>
+      </div>
+      <div class="pace-box">
+        <div class="cda-title">⚡ Pacing ottimale</div>
+        <div class="physics-grid">
+          <div class="phys-field"><label>Media target (W)</label><input type="number" id="pace-avg" value="250" step="1"/></div>
+          <div class="phys-field"><label>NP target (opz.)</label><input type="number" id="pace-np" value="" placeholder="—" step="1"/></div>
+          <div class="phys-field"><label>Pot. min (W)</label><input type="number" id="pace-min" value="150" step="1"/></div>
+          <div class="phys-field"><label>Pot. max (W)</label><input type="number" id="pace-max" value="400" step="1"/></div>
+          <div class="phys-field"><label>Step griglia (m)</label><input type="number" id="pace-step" value="250" step="50" min="50" max="2000"/></div>
+          <div class="phys-field" style="justify-content:flex-end"><label>&nbsp;</label>
+            <button class="btn" type="button" id="paceOptimizeBtn" style="width:100%;justify-content:center;background:linear-gradient(135deg,#f59e0b,#ef4444);color:#0a0e1a;border:none;font-weight:700">Ottimizza sezioni</button></div>
+          <div class="phys-field" style="justify-content:flex-end"><label>&nbsp;</label>
+            <button class="btn" type="button" id="paceOptimizeFullBtn" style="width:100%;justify-content:center;background:linear-gradient(135deg,#00e5ff,#a646e6);color:#0a0e1a;border:none;font-weight:700">Ottimizza completo</button></div>
+        </div>
+        <p class="phys-hint">
+          <strong>Ottimizza sezioni</strong>: watt sulle tue sezioni.<br>
+          <strong>Ottimizza completo</strong>: in background spezza il percorso ogni N metri (default 250), ottimizza il pacing su quella griglia fine, poi assegna alle tue sezioni la media potenza risultante. Le sezioni restano le tue.
+        </p>
+        <div class="cda-result" id="paceResult" style="display:none"></div>
+        <button class="btn" type="button" id="openPowerChartBtn" style="margin-top:10px;display:none;background:linear-gradient(135deg,#34d399,#06b6d4);color:#0a0e1a;border:none;font-weight:700">📈 Grafico potenza prevista</button>
+      </div>
+    </div>
+
     <div class="gara-zone">
       <div class="panel" id="mapPanel">
         <div id="map"></div>
@@ -284,6 +389,12 @@ input[type="file"] { display:none; }
           <span>km</span>
           <input type="number" id="manualKmInput" min="0" step="0.1" placeholder="0.0"/>
           <button class="btn btn-sm ghost" id="manualAddBtn">Aggiungi</button>
+        </div>
+        <div class="manual-add">
+          <span>ogni</span>
+          <input type="number" id="everyKmInput" min="0.05" step="0.05" value="0.25" style="width:70px"/>
+          <span>km</span>
+          <button class="btn btn-sm" id="addEveryBtn" style="background:linear-gradient(135deg,#34d399,#06b6d4);color:#0a0e1a;border:none;font-weight:700">Sezioni ogni</button>
         </div>
         <button class="btn btn-sm ghost" id="resetPointsBtn">↺ Reset punti</button>
         <button class="btn btn-sm ghost" id="exportSectionsBtn">⬇ Esporta sezioni</button>
@@ -317,7 +428,7 @@ input[type="file"] { display:none; }
         <thead>
           <tr>
             <th>#</th><th>Nome sezione</th><th>Da → A</th><th>Regola punto</th><th>Distanza</th><th>D+</th><th>D-</th><th>Dislivello cum.</th>
-            <th>Pend. media</th><th>VAM</th><th>Vel. media</th><th>Vel. media cum.</th><th>Tempo</th><th>Tempo cum.</th><th></th>
+            <th>Pend. media</th><th>VAM</th><th class="col-power">Potenza</th><th class="col-power-cum">Pot. media cum.</th><th>Vel. media</th><th>Vel. media cum.</th><th>Tempo</th><th>Tempo cum.</th><th></th>
           </tr>
         </thead>
         <tbody id="sectionsTbody"></tbody>
@@ -325,7 +436,7 @@ input[type="file"] { display:none; }
       </table>
     </div>
     <div style="display:flex; gap:14px; align-items:center; margin-top:12px; flex-wrap:wrap;">
-      <label style="font-size:0.78rem; color:var(--text-muted); display:flex; align-items:center; gap:8px;">
+      <label id="defaultSpeedLabel" style="font-size:0.78rem; color:var(--text-muted); display:flex; align-items:center; gap:8px;">
         Velocità di default per nuove sezioni
         <input type="number" id="defaultSpeed" value="40" min="0.1" step="0.1" style="width:70px; background:var(--surface2); border:1px solid var(--border); border-radius:8px; color:var(--accent5); font-family:'JetBrains Mono',monospace; padding:6px 8px; text-align:center;"/>
         km/h
@@ -356,8 +467,479 @@ let _hoverMapMarker = null;
 let _zoomStartMarker = null;
 let _zoomEndMarker = null;
 let _smoothingWindow = 5;
-let _mapTileLayers = null; // riferimento ai layer tile (light/dark), popolato da initMap, serve per l'export ad alta risoluzione
+
+let _mapTileLayers = null;
 window._currentZoomDomain = null;
+let calcMode = 'speed';
+let _lastEstimatedCda = null;
+const G = 9.80665;
+
+function getPhysParams() {
+  return {
+    rider: parseFloat(document.getElementById('phys-rider')?.value) || 70,
+    bike: parseFloat(document.getElementById('phys-bike')?.value) || 9,
+    cda: parseFloat(document.getElementById('phys-cda')?.value) || 0.28,
+    crr: parseFloat(document.getElementById('phys-crr')?.value) || 0.004,
+    rho: parseFloat(document.getElementById('phys-rho')?.value) || 1.1989,
+    dtPct: parseFloat(document.getElementById('phys-dt')?.value) || 2,
+    windKmh: parseFloat(document.getElementById('phys-wind')?.value) || 0
+  };
+}
+
+function wheelPowerAtSpeed(speedMS, gradientPct, params) {
+  const m = params.rider + params.bike;
+  const slopeRad = Math.atan(gradientPct / 100);
+  const windMS = params.windKmh / 3.6;
+  const rel = speedMS + windMS;
+  // Il drag aerodinamico si oppone alla velocità RELATIVA e ne segue il segno: con vento in coda
+  // più forte della velocità di marcia (rel < 0, es. discesa lenta o salita ripida con forte vento
+  // a favore), l'aria spinge la bici invece di frenarla. rel*rel perderebbe questo segno (sempre
+  // positivo); rel*|rel| preserva la direzione della forza (drag firmato).
+  const aero = 0.5 * params.rho * params.cda * rel * Math.abs(rel);
+  const roll = params.crr * m * G * Math.cos(slopeRad);
+  const grav = m * G * Math.sin(slopeRad);
+  return (aero + roll + grav) * speedMS;
+}
+
+/** Bisezione stabile anche in discesa */
+function speedFromPower(powerW, gradientPct, params) {
+  const effectivePower = Math.max(0, powerW * (1 - params.dtPct / 100));
+  const f = (v) => wheelPowerAtSpeed(v, gradientPct, params) - effectivePower;
+  let lo = 0.5, hi = 45;
+  for (let i = 0; i < 60; i++) {
+    const mid = (lo + hi) / 2;
+    const fm = f(mid);
+    if (Math.abs(fm) < 0.05) return mid;
+    if (fm < 0) lo = mid; else hi = mid;
+  }
+  return (lo + hi) / 2;
+}
+
+function powerFromSpeed(speedMS, gradientPct, params) {
+  if (speedMS < 0.1) return 0;
+  const wheel = wheelPowerAtSpeed(speedMS, gradientPct, params);
+  if (wheel <= 0) return 0; // discesa: si frena
+  const eff = 1 - params.dtPct / 100;
+  return eff > 0 ? wheel / eff : wheel;
+}
+
+function estimateCda(speedMS, powerW, gradientPct, params) {
+  if (speedMS < 0.5 || powerW < 10) return null;
+  const m = params.rider + params.bike;
+  const slopeRad = Math.atan(gradientPct / 100);
+  const windMS = params.windKmh / 3.6;
+  const rel = speedMS + windMS;
+  if (Math.abs(rel) < 0.3) return null;
+  const effectivePower = powerW * (1 - params.dtPct / 100);
+  const roll = params.crr * m * G * Math.cos(slopeRad);
+  const grav = m * G * Math.sin(slopeRad);
+  const aeroForce = effectivePower / speedMS - roll - grav;
+  if (aeroForce <= 0) return null;
+  // Coerente con la forza di drag firmata usata in wheelPowerAtSpeed (rel*|rel|).
+  const cda = (2 * aeroForce) / (params.rho * rel * Math.abs(rel));
+  return (cda > 0.1 && cda < 0.8) ? cda : null;
+}
+
+// ═══════════════════════════════════════════════════════
+// NORMALIZED POWER — implementazione standard (Coggan/TrainingPeaks):
+// campiona la potenza a ~1s, applica una media mobile di 30s, poi calcola
+// la radice quarta della media della quarta potenza sulla serie smussata.
+// Sostituisce il precedente "Math.pow(mean(p^4), 0.25)" calcolato
+// direttamente sui valori di sezione, che pesava per NUMERO di segmenti
+// (o di celle della griglia fine) invece che per TEMPO e non applicava
+// alcuna finestra mobile — quindi non era comparabile con la NP che un
+// vero misuratore di potenza calcola dall'attività reale.
+// Riusa rollingAvgPower(), già presente più sotto per il grafico "Piano potenza".
+// ═══════════════════════════════════════════════════════
+function buildConstPowerSamples(segList, params) {
+  // segList: array di { distanceKm, gradient, power } — potenza costante nel segmento
+  const samples = [];
+  let tSec = 0;
+  for (const s of segList) {
+    if (!(s.distanceKm > 0)) continue;
+    const v = speedFromPower(s.power, s.gradient, params) * 3.6; // km/h
+    const durSec = v > 0.1 ? (s.distanceKm / v) * 3600 : 0;
+    if (durSec <= 0) continue;
+    const n = Math.max(1, Math.round(durSec));
+    const dt = durSec / n;
+    for (let k = 0; k < n; k++) samples.push({ tSec: tSec + dt * (k + 0.5), power: s.power });
+    tSec += durSec;
+  }
+  return samples;
+}
+
+/** NP standard: campiona a ~1s, media mobile 30s, poi radice quarta della media della potenza^4. */
+function computeNormalizedPower(segList, params) {
+  const samples = buildConstPowerSamples(segList, params);
+  if (!samples.length) return 0;
+  const roll = rollingAvgPower(samples, 30);
+  const sum4 = roll.reduce((a, p) => a + Math.pow(p, 4), 0);
+  return Math.pow(sum4 / roll.length, 0.25);
+}
+
+/** Media di potenza pesata sul TEMPO su una lista { distanceKm, gradient, power }. */
+function timeWeightedAvgPowerFromList(segList, params) {
+  let sumPT = 0, sumT = 0;
+  for (const s of segList) {
+    if (!(s.distanceKm > 0)) continue;
+    const v = speedFromPower(s.power, s.gradient, params) * 3.6;
+    const t = v > 0.1 ? s.distanceKm / v : 0;
+    sumPT += s.power * t; sumT += t;
+  }
+  return sumT > 0 ? sumPT / sumT : 0;
+}
+
+function setCalcMode(mode) {
+  calcMode = mode;
+  document.getElementById('modeSpeedBtn')?.classList.toggle('active', mode === 'speed');
+  document.getElementById('modePowerBtn')?.classList.toggle('active', mode === 'power');
+  const wrap = document.getElementById('defaultPowerWrap');
+  const lab = document.getElementById('defaultSpeedLabel');
+  if (wrap) wrap.style.display = mode === 'power' ? 'flex' : 'none';
+  if (lab) lab.style.opacity = mode === 'speed' ? '1' : '0.45';
+  if (routeData) refreshAll();
+}
+
+/** Copia velocità calcolate (modalità potenza) nei campi speed dei punti */
+function transferSpeedsFromPower() {
+  if (!routeData || points.length < 2) { alert('Nessuna sezione.'); return; }
+  // Forza calcolo in power mode temporaneamente se serve
+  const params = getPhysParams();
+  const defPower = parseFloat(document.getElementById('defaultPower')?.value) || 250;
+  let n = 0;
+  for (let i = 1; i < points.length; i++) {
+    const from = points[i - 1], to = points[i];
+    const distanceKm = to.distKm - from.distKm;
+    const netElev = getInterpolatedPoint(to.distKm).ele - getInterpolatedPoint(from.distKm).ele;
+    const gradient = distanceKm > 0 ? (netElev / (distanceKm * 1000)) * 100 : 0;
+    const powerW = (to.power != null && !isNaN(to.power)) ? to.power : defPower;
+    const speedKmh = speedFromPower(powerW, gradient, params) * 3.6;
+    to.speed = Math.round(speedKmh * 10) / 10;
+    n++;
+  }
+  setCalcMode('speed');
+  flashMessage(`Velocità trasferite su ${n} sezioni`);
+}
+
+/** Copia potenze calcolate (modalità velocità) nei campi power dei punti */
+function transferPowersFromSpeed() {
+  if (!routeData || points.length < 2) { alert('Nessuna sezione.'); return; }
+  const params = getPhysParams();
+  let n = 0;
+  for (let i = 1; i < points.length; i++) {
+    const from = points[i - 1], to = points[i];
+    const distanceKm = to.distKm - from.distKm;
+    const netElev = getInterpolatedPoint(to.distKm).ele - getInterpolatedPoint(from.distKm).ele;
+    const gradient = distanceKm > 0 ? (netElev / (distanceKm * 1000)) * 100 : 0;
+    const speed = to.speed || 0;
+    const powerW = powerFromSpeed(speed / 3.6, gradient, params);
+    to.power = Math.round(powerW);
+    n++;
+  }
+  setCalcMode('power');
+  flashMessage(`Potenze trasferite su ${n} sezioni`);
+}
+
+function runCdaEstimate() {
+  const speedKmh = parseFloat(document.getElementById('cda-speed')?.value);
+  const powerW = parseFloat(document.getElementById('cda-power')?.value);
+  const grade = parseFloat(document.getElementById('cda-grade')?.value) || 0;
+  const params = getPhysParams();
+  const cda = estimateCda(speedKmh / 3.6, powerW, grade, params);
+  const resultEl = document.getElementById('cdaResult');
+  const applyBtn = document.getElementById('cdaApplyBtn');
+  if (cda == null) {
+    resultEl.textContent = 'Dati non validi (aeroForce ≤ 0 — controlla pendenza/potenza/velocità)';
+    resultEl.style.color = 'var(--accent3)';
+    if (applyBtn) applyBtn.style.display = 'none';
+    _lastEstimatedCda = null; return;
+  }
+  _lastEstimatedCda = cda;
+  const m = params.rider + params.bike;
+  resultEl.innerHTML = `CdA stimato: <strong>${cda.toFixed(3)}</strong> m²
+    <span style="font-size:0.78rem;font-weight:400;color:var(--text-muted)">
+    · m=${m.toFixed(1)} kg · Crr=${params.crr} · dt=${params.dtPct}% · ρ=${params.rho.toFixed(3)} · vento=${params.windKmh} km/h</span>`;
+  resultEl.style.color = 'var(--accent4)';
+  if (applyBtn) applyBtn.style.display = 'inline-flex';
+}
+
+function applyEstimatedCda() {
+  if (_lastEstimatedCda == null) return;
+  const el = document.getElementById('phys-cda');
+  if (el) { el.value = _lastEstimatedCda.toFixed(3); if (routeData) updateComputedOnly(); flashMessage('CdA → ' + _lastEstimatedCda.toFixed(3)); }
+}
+
+
+/** Proietta i watt affinché la media pesata sul TEMPO sia = targetAvg (con clamp min/max). */
+function projectTimeWeightedPower(powers, segs, targetAvg, pMin, pMax, params) {
+  // Itera perché t_i dipende da P_i
+  for (let round = 0; round < 12; round++) {
+    let sumPT = 0, sumT = 0;
+    const times = [];
+    for (let i = 0; i < segs.length; i++) {
+      const v = speedFromPower(powers[i], segs[i].gradient, params) * 3.6;
+      const t = v > 0.1 ? segs[i].distanceKm / v : 1e-6;
+      times.push(t);
+      sumPT += powers[i] * t;
+      sumT += t;
+    }
+    const mean = sumPT / (sumT || 1);
+    if (Math.abs(mean - targetAvg) < 0.15) break;
+    const scale = targetAvg / (mean || 1);
+    // scale + clamp
+    for (let i = 0; i < powers.length; i++) {
+      powers[i] = Math.min(pMax, Math.max(pMin, powers[i] * scale));
+    }
+    // Se dopo clamp la media è ancora alta/bassa, sposta i segmenti non saturi
+    sumPT = 0; sumT = 0;
+    for (let i = 0; i < segs.length; i++) {
+      const v = speedFromPower(powers[i], segs[i].gradient, params) * 3.6;
+      const t = v > 0.1 ? segs[i].distanceKm / v : 1e-6;
+      times[i] = t;
+      sumPT += powers[i] * t;
+      sumT += t;
+    }
+    let err = targetAvg - (sumPT / (sumT || 1));
+    if (Math.abs(err) < 0.15) break;
+    // Distribuisci l'errore sui segmenti non al limite
+    const free = [];
+    for (let i = 0; i < powers.length; i++) {
+      if ((err > 0 && powers[i] < pMax - 0.5) || (err < 0 && powers[i] > pMin + 0.5)) free.push(i);
+    }
+    if (free.length === 0) break;
+    let freeT = free.reduce((a, i) => a + times[i], 0) || 1;
+    for (const i of free) {
+      powers[i] = Math.min(pMax, Math.max(pMin, powers[i] + err * (times[i] / freeT) * sumT / times[i]));
+      // semplificato: delta = err * (totalTime / freeTime) applicato in proporzione al tempo
+    }
+    // Ricalcolo delta più stabile: aggiungi err a tutti i free in modo uniforme pesato tempo
+    sumPT = 0; sumT = 0;
+    for (let i = 0; i < segs.length; i++) {
+      const v = speedFromPower(powers[i], segs[i].gradient, params) * 3.6;
+      const t = v > 0.1 ? segs[i].distanceKm / v : 1e-6;
+      sumPT += powers[i] * t; sumT += t;
+    }
+    err = targetAvg - sumPT / (sumT || 1);
+    freeT = 0;
+    const free2 = [];
+    for (let i = 0; i < powers.length; i++) {
+      const atMax = powers[i] >= pMax - 0.5;
+      const atMin = powers[i] <= pMin + 0.5;
+      if ((err > 0 && !atMax) || (err < 0 && !atMin)) {
+        const v = speedFromPower(powers[i], segs[i].gradient, params) * 3.6;
+        const t = v > 0.1 ? segs[i].distanceKm / v : 1e-6;
+        free2.push({ i, t });
+        freeT += t;
+      }
+    }
+    if (free2.length === 0 || freeT < 1e-9) break;
+    for (const { i, t } of free2) {
+      // Per spostare la media di err, il contributo di i è (delta_i * t)/sumT = share
+      // delta_i = err * sumT / freeT  (stesso delta su tutti i free ≈ ok)
+      const delta = err * (sumT / freeT);
+      powers[i] = Math.min(pMax, Math.max(pMin, powers[i] + delta));
+    }
+  }
+  return powers;
+}
+
+function optimizePacing() {
+  if (!routeData || points.length < 2) { alert('Carica un GPX e definisci le sezioni.'); return; }
+  const targetAvg = parseFloat(document.getElementById('pace-avg')?.value);
+  const targetNP = parseFloat(document.getElementById('pace-np')?.value);
+  const pMin = parseFloat(document.getElementById('pace-min')?.value) || 100;
+  const pMax = parseFloat(document.getElementById('pace-max')?.value) || 500;
+  if (!targetAvg || targetAvg < 50) { alert('Inserisci una potenza media target valida.'); return; }
+  const params = getPhysParams();
+  const segs = [];
+  for (let i = 1; i < points.length; i++) {
+    const from = points[i-1], to = points[i];
+    const distanceKm = to.distKm - from.distKm;
+    const netElev = getInterpolatedPoint(to.distKm).ele - getInterpolatedPoint(from.distKm).ele;
+    const gradient = distanceKm > 0 ? (netElev / (distanceKm * 1000)) * 100 : 0;
+    segs.push({ to, distanceKm, gradient });
+  }
+  if (!segs.length) return;
+
+  let powers = segs.map(() => targetAvg);
+
+  for (let iter = 0; iter < 50; iter++) {
+    const marg = [];
+    for (let i = 0; i < segs.length; i++) {
+      const s = segs[i];
+      const v0 = speedFromPower(powers[i], s.gradient, params) * 3.6;
+      const t0 = v0 > 0.1 ? s.distanceKm / v0 : 999;
+      const v1 = speedFromPower(powers[i] + 5, s.gradient, params) * 3.6;
+      const t1 = v1 > 0.1 ? s.distanceKm / v1 : 999;
+      marg.push(Math.max(0, (t0 - t1) / 5));
+    }
+    const sumMarg = marg.reduce((a, b) => a + b, 0);
+    if (sumMarg < 1e-12) break;
+
+    // Redistribuisci proporzionale a marginal benefit (tempo risparmiato per watt)
+    const alpha = 0.65;
+    const raw = marg.map(m => Math.pow(m + 1e-9, alpha));
+    const sumRaw = raw.reduce((a, b) => a + b, 0) || 1;
+    // parti da shape, poi proietta su media tempo
+    let shaped = raw.map(r => targetAvg * (r / sumRaw) * segs.length);
+    // blend
+    const blend = 0.4;
+    powers = powers.map((p, i) => p * (1 - blend) + shaped[i] * blend);
+    powers = projectTimeWeightedPower(powers, segs, targetAvg, pMin, pMax, params);
+  }
+
+  if (targetNP && targetNP > 50) {
+    for (let adj = 0; adj < 20; adj++) {
+      const segList = segs.map((s, i) => ({ distanceKm: s.distanceKm, gradient: s.gradient, power: powers[i] }));
+      const np = computeNormalizedPower(segList, params);
+      if (Math.abs(np - targetNP) < 0.8) break;
+      const mean = timeWeightedAvgPowerFromList(segList, params);
+      const factor = np > targetNP ? 0.9 : 1.1;
+      powers = powers.map(p => mean + (p - mean) * factor);
+      powers = projectTimeWeightedPower(powers, segs, targetAvg, pMin, pMax, params);
+    }
+  }
+
+  for (let i = 0; i < segs.length; i++) segs[i].to.power = Math.round(powers[i]);
+  setCalcMode('power');
+
+  // Report TIME-weighted avg
+  let sumPT = 0, sumT = 0;
+  for (let i = 0; i < segs.length; i++) {
+    const v = speedFromPower(powers[i], segs[i].gradient, params) * 3.6;
+    const t = v > 0.1 ? segs[i].distanceKm / v : 0;
+    sumPT += powers[i] * t; sumT += t;
+  }
+  const avgP = sumT > 0 ? sumPT / sumT : targetAvg;
+  // NP standard (media mobile 30s pesata sul tempo) — non più "media(p^4) per numero di sezioni"
+  const np = computeNormalizedPower(segs.map((s, i) => ({ distanceKm: s.distanceKm, gradient: s.gradient, power: powers[i] })), params);
+  const el = document.getElementById('paceResult');
+  if (el) {
+    el.style.display = 'block';
+    el.innerHTML = `Sezioni · Tempo: <strong>${formatTime(sumT)}</strong> · Media (tempo) <strong>${avgP.toFixed(0)} W</strong> (target ${targetAvg}) · NP ~${np.toFixed(0)} W · Range ${Math.min(...powers).toFixed(0)}–${Math.max(...powers).toFixed(0)} W`;
+    el.style.color = Math.abs(avgP - targetAvg) < 3 ? 'var(--accent4)' : 'var(--accent3)';
+  }
+  flashMessage('Pacing sezioni ottimizzato ✓');
+}
+
+function optimizePacingFull() {
+  if (!routeData || !routeData.points || routeData.points.length < 2) {
+    alert('Carica un GPX.'); return;
+  }
+  if (points.length < 2) { alert('Definisci almeno una sezione.'); return; }
+
+  const targetAvg = parseFloat(document.getElementById('pace-avg')?.value);
+  const targetNP = parseFloat(document.getElementById('pace-np')?.value);
+  const pMin = parseFloat(document.getElementById('pace-min')?.value) || 100;
+  const pMax = parseFloat(document.getElementById('pace-max')?.value) || 500;
+  const stepM = parseFloat(document.getElementById('pace-step')?.value) || 250;
+  if (!targetAvg || targetAvg < 50) { alert('Inserisci una potenza media target valida.'); return; }
+  if (stepM < 50) { alert('Step minimo 50 m.'); return; }
+
+  const params = getPhysParams();
+  const totalKm = routeData.distanceKm;
+  const stepKm = stepM / 1000;
+
+  const finePts = [];
+  for (let d = 0; d < totalKm - 1e-9; d += stepKm) finePts.push(d);
+  if (finePts[finePts.length - 1] < totalKm - 1e-6) finePts.push(totalKm);
+  else finePts[finePts.length - 1] = totalKm;
+
+  const segs = [];
+  for (let i = 1; i < finePts.length; i++) {
+    const d0 = finePts[i - 1], d1 = finePts[i];
+    const distanceKm = d1 - d0;
+    if (distanceKm < 1e-6) continue;
+    const netElev = getInterpolatedPoint(d1).ele - getInterpolatedPoint(d0).ele;
+    const gradient = (netElev / (distanceKm * 1000)) * 100;
+    segs.push({ d0, d1, distanceKm, gradient });
+  }
+  if (segs.length === 0) return;
+
+  let powers = segs.map(() => targetAvg);
+
+  for (let iter = 0; iter < 55; iter++) {
+    const marg = [];
+    for (let i = 0; i < segs.length; i++) {
+      const s = segs[i];
+      const v0 = speedFromPower(powers[i], s.gradient, params) * 3.6;
+      const t0 = v0 > 0.1 ? s.distanceKm / v0 : 999;
+      const v1 = speedFromPower(powers[i] + 5, s.gradient, params) * 3.6;
+      const t1 = v1 > 0.1 ? s.distanceKm / v1 : 999;
+      marg.push(Math.max(0, (t0 - t1) / 5));
+    }
+    const sumMarg = marg.reduce((a, b) => a + b, 0);
+    if (sumMarg < 1e-12) break;
+    const alpha = 0.65;
+    const raw = marg.map(m => Math.pow(m + 1e-9, alpha));
+    const sumRaw = raw.reduce((a, b) => a + b, 0) || 1;
+    let shaped = raw.map(r => targetAvg * (r / sumRaw) * segs.length);
+    const blend = 0.4;
+    powers = powers.map((p, i) => p * (1 - blend) + shaped[i] * blend);
+    powers = projectTimeWeightedPower(powers, segs, targetAvg, pMin, pMax, params);
+  }
+
+  if (targetNP && targetNP > 50) {
+    for (let adj = 0; adj < 20; adj++) {
+      const segList = segs.map((s, i) => ({ distanceKm: s.distanceKm, gradient: s.gradient, power: powers[i] }));
+      const np = computeNormalizedPower(segList, params);
+      if (Math.abs(np - targetNP) < 0.8) break;
+      const mean = timeWeightedAvgPowerFromList(segList, params);
+      const factor = np > targetNP ? 0.9 : 1.1;
+      powers = powers.map(p => mean + (p - mean) * factor);
+      powers = projectTimeWeightedPower(powers, segs, targetAvg, pMin, pMax, params);
+    }
+  }
+
+  // Tempo e media dalla griglia fine (TIME-weighted)
+  let totalTimeH = 0, sumWork = 0;
+  for (let i = 0; i < segs.length; i++) {
+    const v = speedFromPower(powers[i], segs[i].gradient, params) * 3.6;
+    const t = v > 0.1 ? segs[i].distanceKm / v : 0;
+    totalTimeH += t;
+    sumWork += powers[i] * t;
+    segs[i].power = powers[i];
+    segs[i].timeH = t;
+  }
+  window._finePowerPlan = segs.map(s => ({
+    d0: s.d0, d1: s.d1, distanceKm: s.distanceKm, gradient: s.gradient,
+    power: s.power, timeH: s.timeH
+  }));
+  const chartBtn = document.getElementById('openPowerChartBtn');
+  if (chartBtn) chartBtn.style.display = 'inline-flex';
+  const avgP = totalTimeH > 0 ? sumWork / totalTimeH : targetAvg;
+
+  // Mappa sulle sezioni utente (media pesata distanza dei micro-segmenti)
+  for (let i = 1; i < points.length; i++) {
+    const fromKm = points[i - 1].distKm;
+    const toKm = points[i].distKm;
+    let wSum = 0, pSum = 0;
+    for (let j = 0; j < segs.length; j++) {
+      const a = Math.max(segs[j].d0, fromKm);
+      const b = Math.min(segs[j].d1, toKm);
+      const overlap = b - a;
+      if (overlap > 1e-9) { pSum += powers[j] * overlap; wSum += overlap; }
+    }
+    points[i].power = wSum > 0 ? Math.round(pSum / wSum) : Math.round(targetAvg);
+  }
+
+  setCalcMode('power');
+
+  // NP standard (media mobile 30s pesata sul tempo su griglia fine) — non più "media(p^4) per numero di celle"
+  const np = computeNormalizedPower(segs.map(s => ({ distanceKm: s.distanceKm, gradient: s.gradient, power: s.power })), params);
+  const el = document.getElementById('paceResult');
+  if (el) {
+    el.style.display = 'block';
+    const ok = Math.abs(avgP - targetAvg) < 3;
+    el.innerHTML = `Completo (${segs.length} × ${stepM} m) · Tempo griglia: <strong>${formatTime(totalTimeH)}</strong> · Media (tempo) <strong>${avgP.toFixed(0)} W</strong> (target ${targetAvg}) · NP ~${np.toFixed(0)} · Range ${Math.min(...powers).toFixed(0)}–${Math.max(...powers).toFixed(0)} W<br>
+      <span style</span>`;
+    el.style.color = ok ? 'var(--accent4)' : 'var(--accent3)';
+  }
+  flashMessage(`Ottimizzazione completa: media ${avgP.toFixed(0)} W (target ${targetAvg})`);
+}
+
+
+
 
 // ═══════════════════════════════════════════════════════
 // UTILS
@@ -545,9 +1127,11 @@ function processRoute(rawPoints, fileName) {
 
   routeData = { points: processedPoints, distanceKm: distance / 1000, elevationGain, maxElevation, minElevation };
 
+  const _defSpeed = parseFloat(document.getElementById('defaultSpeed').value) || 40;
+  const _defPower = parseFloat(document.getElementById('defaultPower')?.value) || 250;
   points = [
-    { id: 1, distKm: 0, fixed: 'start', sectionLabel: null, speed: null },
-    { id: 2, distKm: routeData.distanceKm, fixed: 'finish', sectionLabel: 'S1', speed: parseFloat(document.getElementById('defaultSpeed').value) || 40 }
+    { id: 1, distKm: 0, fixed: 'start', sectionLabel: null, speed: null, power: null },
+    { id: 2, distKm: routeData.distanceKm, fixed: 'finish', sectionLabel: 'S1', speed: _defSpeed, power: _defPower }
   ];
   nextId = 3;
 
@@ -617,7 +1201,8 @@ function addBreakpointAtDistance(distKm) {
   const tooClose = points.some(p => Math.abs(p.distKm - distKm) < MIN_POINT_SEP_KM);
   if (tooClose) { flashMessage('Punto troppo vicino a uno già esistente (min. 5 m)'); return; }
   const defSpeed = parseFloat(document.getElementById('defaultSpeed').value) || 40;
-  points.push({ id: nextId++, distKm, fixed: false, sectionLabel: 'Sezione', speed: defSpeed });
+  const defPower = parseFloat(document.getElementById('defaultPower')?.value) || 250;
+  points.push({ id: nextId++, distKm, fixed: false, sectionLabel: 'Sezione', speed: defSpeed, power: defPower });
   points.sort((a, b) => a.distKm - b.distKm);
   renumberSections();
   refreshAll();
@@ -656,9 +1241,12 @@ function renumberSections() {
 document.getElementById('resetPointsBtn').addEventListener('click', () => {
   if (!routeData) return;
   const finishSpeed = points[points.length - 1].speed;
+  const finishPower = points[points.length - 1].power;
   points = [
-    { id: 1, distKm: 0, fixed: 'start', sectionLabel: null, speed: null },
-    { id: 2, distKm: routeData.distanceKm, fixed: 'finish', sectionLabel: 'S1', speed: finishSpeed || parseFloat(document.getElementById('defaultSpeed').value) || 40 }
+    { id: 1, distKm: 0, fixed: 'start', sectionLabel: null, speed: null, power: null },
+    { id: 2, distKm: routeData.distanceKm, fixed: 'finish', sectionLabel: 'S1',
+      speed: finishSpeed || parseFloat(document.getElementById('defaultSpeed').value) || 40,
+      power: finishPower || parseFloat(document.getElementById('defaultPower')?.value) || 250 }
   ];
   nextId = 3;
   refreshAll();
@@ -667,6 +1255,27 @@ document.getElementById('manualAddBtn').addEventListener('click', () => {
   const v = parseFloat(document.getElementById('manualKmInput').value);
   if (!isNaN(v)) { addBreakpointAtDistance(v); document.getElementById('manualKmInput').value = ''; }
 });
+
+/** Aggiunge punti sezione ogni stepKm lungo il percorso (oltre a start/finish già presenti). */
+function addBreakpointsEvery(stepKm) {
+  if (!routeData) { alert('Carica un GPX.'); return; }
+  if (!stepKm || stepKm < 0.05) { alert('Passo minimo 0.05 km.'); return; }
+  const total = routeData.distanceKm;
+  let added = 0;
+  for (let d = stepKm; d < total - 1e-6; d += stepKm) {
+    // evita duplicati troppo vicini a punti esistenti
+    const tooClose = points.some(p => Math.abs(p.distKm - d) < 0.01);
+    if (tooClose) continue;
+    addBreakpointAtDistance(Math.round(d * 1000) / 1000);
+    added++;
+  }
+  flashMessage(added ? `Aggiunte ${added} sezioni ogni ${stepKm} km` : 'Nessun nuovo punto (già presenti)');
+}
+document.getElementById('addEveryBtn')?.addEventListener('click', () => {
+  const v = parseFloat(document.getElementById('everyKmInput')?.value);
+  if (!isNaN(v)) addBreakpointsEvery(v);
+});
+
 
 // ═══════════════════════════════════════════════════════
 // EXPORT / IMPORT SEZIONI — salva e ricarica le modifiche
@@ -681,7 +1290,8 @@ function exportSections() {
     routeName: document.getElementById('routeName').value || '',
     routeDistanceKm: routeData.distanceKm,
     defaultSpeed: parseFloat(document.getElementById('defaultSpeed').value) || 40,
-    points: points.map(p => ({ distKm: p.distKm, fixed: p.fixed, sectionLabel: p.sectionLabel, speed: p.speed }))
+    points: points.map(p => ({ distKm: p.distKm, fixed: p.fixed, sectionLabel: p.sectionLabel, speed: p.speed, power: p.power })),
+    calcMode: calcMode
   };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
@@ -719,9 +1329,11 @@ function importSections(file) {
         distKm: Math.min(Math.max(0, Number(p.distKm) || 0), routeData.distanceKm),
         fixed: p.fixed === 'start' || p.fixed === 'finish' ? p.fixed : false,
         sectionLabel: p.sectionLabel != null ? String(p.sectionLabel) : 'Sezione',
-        speed: p.speed != null && !isNaN(parseFloat(p.speed)) ? parseFloat(p.speed) : defSpeed
+        speed: p.speed != null && !isNaN(parseFloat(p.speed)) ? parseFloat(p.speed) : defSpeed,
+        power: p.power != null && !isNaN(parseFloat(p.power)) ? parseFloat(p.power) : (parseFloat(document.getElementById('defaultPower')?.value) || 250)
       }))
       .sort((a, b) => a.distKm - b.distKm);
+    if (payload.calcMode === 'power' || payload.calcMode === 'speed') setCalcMode(payload.calcMode);
 
     // Garantisce sempre un punto di partenza (0 km) e uno di arrivo (fine percorso) fissi.
     if (imported.length === 0 || imported[0].fixed !== 'start') {
@@ -1136,6 +1748,284 @@ function updateSmoothing(val) {
   }
 }
 
+
+// ═══════════════════════════════════════════════════════
+// POWER PLAN CHART (altimetria + potenza + media mobile)
+// ═══════════════════════════════════════════════════════
+
+function clampRollSec(v, fallback) {
+  const n = parseFloat(v);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(1200, Math.max(30, n));
+}
+
+function getPowerRollWindows() {
+  const cA = document.getElementById('powerRollCustomA')?.value;
+  const cB = document.getElementById('powerRollCustomB')?.value;
+  const winA = (cA !== '' && cA != null && Number.isFinite(parseFloat(cA)))
+    ? clampRollSec(cA, 120)
+    : clampRollSec(document.getElementById('powerRollSelectA')?.value, 120);
+  const winB = (cB !== '' && cB != null && Number.isFinite(parseFloat(cB)))
+    ? clampRollSec(cB, 300)
+    : clampRollSec(document.getElementById('powerRollSelectB')?.value, 300);
+  return { winA, winB };
+}
+
+/** Serie a 1s: potenza costante a tratti dal piano fine */
+function buildPowerTimeSeries(plan) {
+  const samples = [];
+  let tSec = 0;
+  for (const seg of plan) {
+    const dur = Math.max(0, seg.timeH * 3600);
+    const n = Math.max(1, Math.round(dur));
+    const dt = dur / n;
+    const dd = seg.distanceKm / n;
+    for (let k = 0; k < n; k++) {
+      const dMid = seg.d0 + dd * (k + 0.5);
+      let ele = 0;
+      try { ele = getInterpolatedPoint(dMid).ele; } catch (e) { ele = 0; }
+      samples.push({ tSec, power: seg.power, distKm: dMid, ele });
+      tSec += dt;
+    }
+  }
+  return samples;
+}
+
+function rollingAvgPower(samples, windowSec) {
+  const out = new Array(samples.length);
+  let sum = 0, left = 0;
+  for (let right = 0; right < samples.length; right++) {
+    sum += samples[right].power;
+    while (left < right && (samples[right].tSec - samples[left].tSec) > windowSec) {
+      sum -= samples[left].power;
+      left++;
+    }
+    out[right] = sum / (right - left + 1);
+  }
+  return out;
+}
+
+function openPowerPlanChart() {
+  if (!window._finePowerPlan || !window._finePowerPlan.length) {
+    alert('Esegui prima «Ottimizza completo» per generare il piano potenza.');
+    return;
+  }
+  document.getElementById('powerModalOverlay')?.classList.add('open');
+  renderPowerPlanChart();
+}
+
+function closePowerPlanChart() {
+  document.getElementById('powerModalOverlay')?.classList.remove('open');
+}
+
+function renderPowerPlanChart() {
+  const plan = window._finePowerPlan;
+  if (!plan || !plan.length) return;
+  const host = document.getElementById('powerPlanChart');
+  if (!host) return;
+  host.innerHTML = '';
+
+  const { winA, winB } = getPowerRollWindows();
+  const samples = buildPowerTimeSeries(plan);
+  if (!samples.length) return;
+  const rollA = rollingAvgPower(samples, winA);
+  const rollB = rollingAvgPower(samples, winB);
+
+  const W = host.clientWidth || 1000;
+  const H = 420;
+  const margin = { top: 24, right: 56, bottom: 40, left: 52 };
+  const width = W - margin.left - margin.right;
+  const height = H - margin.top - margin.bottom;
+
+  const svg = d3.select(host).append('svg')
+    .attr('width', W).attr('height', H);
+  const g = svg.append('g').attr('transform', `translate(${margin.left},${margin.top})`);
+
+  const x = d3.scaleLinear()
+    .domain([0, d3.max(samples, d => d.distKm)])
+    .range([0, width]);
+  const yEle = d3.scaleLinear()
+    .domain([d3.min(samples, d => d.ele) - 5, d3.max(samples, d => d.ele) + 5])
+    .nice()
+    .range([height, 0]);
+  const yPow = d3.scaleLinear()
+    .domain([0, Math.max(50, d3.max(samples, d => d.power) * 1.15, d3.max(rollA) * 1.15, d3.max(rollB) * 1.15)])
+    .nice()
+    .range([height, 0]);
+
+  g.append('g').attr('transform', `translate(0,${height})`)
+    .call(d3.axisBottom(x).ticks(10).tickSize(-height).tickFormat(''))
+    .selectAll('line').attr('stroke', '#e2e8f0');
+  g.append('g')
+    .call(d3.axisLeft(yEle).ticks(6).tickSize(-width).tickFormat(''))
+    .selectAll('line').attr('stroke', '#e2e8f0');
+
+  const area = d3.area()
+    .x(d => x(d.distKm)).y0(height).y1(d => yEle(d.ele)).curve(d3.curveMonotoneX);
+  g.append('path').datum(samples).attr('fill', 'rgba(148,163,184,0.25)').attr('d', area);
+  g.append('path').datum(samples)
+    .attr('fill', 'none').attr('stroke', '#94a3b8').attr('stroke-width', 1.5)
+    .attr('d', d3.line().x(d => x(d.distKm)).y(d => yEle(d.ele)).curve(d3.curveMonotoneX));
+
+  g.append('path').datum(samples)
+    .attr('fill', 'none').attr('stroke', '#f59e0b').attr('stroke-width', 1.2).attr('opacity', 0.75)
+    .attr('d', d3.line().x(d => x(d.distKm)).y(d => yPow(d.power)).curve(d3.curveStepAfter));
+
+  const rollDataA = samples.map((d, i) => ({ distKm: d.distKm, p: rollA[i] }));
+  const rollDataB = samples.map((d, i) => ({ distKm: d.distKm, p: rollB[i] }));
+  g.append('path').datum(rollDataA)
+    .attr('fill', 'none').attr('stroke', '#a646e6').attr('stroke-width', 2.5)
+    .attr('d', d3.line().x(d => x(d.distKm)).y(d => yPow(d.p)).curve(d3.curveMonotoneX));
+  g.append('path').datum(rollDataB)
+    .attr('fill', 'none').attr('stroke', '#06b6d4').attr('stroke-width', 2.5)
+    .attr('d', d3.line().x(d => x(d.distKm)).y(d => yPow(d.p)).curve(d3.curveMonotoneX));
+
+  g.append('g').attr('transform', `translate(0,${height})`)
+    .call(d3.axisBottom(x).ticks(10).tickFormat(d => d.toFixed(1) + ' km'))
+    .selectAll('text').attr('fill', '#64748b');
+  g.append('g')
+    .call(d3.axisLeft(yEle).ticks(6).tickFormat(d => Math.round(d) + ' m'))
+    .selectAll('text').attr('fill', '#64748b');
+  g.append('g').attr('transform', `translate(${width},0)`)
+    .call(d3.axisRight(yPow).ticks(6).tickFormat(d => Math.round(d) + ' W'))
+    .selectAll('text').attr('fill', '#a646e6');
+
+  const focus = g.append('g').style('display', 'none');
+  focus.append('line').attr('y1', 0).attr('y2', height).attr('stroke', '#64748b').attr('stroke-dasharray', '4,4');
+  focus.append('circle').attr('r', 4).attr('fill', '#a646e6').attr('id', 'f-rollA');
+  focus.append('circle').attr('r', 4).attr('fill', '#06b6d4').attr('id', 'f-rollB');
+  focus.append('circle').attr('r', 3).attr('fill', '#f59e0b').attr('id', 'f-pow');
+
+  const tip = d3.select(host).append('div')
+    .style('position', 'absolute').style('pointer-events', 'none').style('display', 'none')
+    .style('background', 'rgba(15,15,15,0.92)').style('color', '#fff').style('padding', '6px 10px')
+    .style('border-radius', '6px').style('font-size', '12px').style('font-family', 'Inter,sans-serif');
+
+  host.style.position = 'relative';
+  svg.append('rect')
+    .attr('transform', `translate(${margin.left},${margin.top})`)
+    .attr('width', width).attr('height', height)
+    .attr('fill', 'transparent')
+    .on('mouseenter', () => { focus.style('display', null); tip.style('display', 'block'); })
+    .on('mouseleave', () => { focus.style('display', 'none'); tip.style('display', 'none'); })
+    .on('mousemove', function(event) {
+      const [mx] = d3.pointer(event, this);
+      const dist = x.invert(mx);
+      let best = 0, bestD = Infinity;
+      for (let i = 0; i < samples.length; i++) {
+        const dd = Math.abs(samples[i].distKm - dist);
+        if (dd < bestD) { bestD = dd; best = i; }
+      }
+      const s = samples[best];
+      focus.attr('transform', `translate(${x(s.distKm)},0)`);
+      focus.select('#f-rollA').attr('cy', yPow(rollA[best]));
+      focus.select('#f-rollB').attr('cy', yPow(rollB[best]));
+      focus.select('#f-pow').attr('cy', yPow(s.power));
+      tip.style('left', (margin.left + x(s.distKm) + 12) + 'px').style('top', '20px')
+        .html(`<strong>${s.distKm.toFixed(2)} km</strong> · ${Math.round(s.ele)} m · t=${formatTime(s.tSec/3600)}<br>
+          Potenza: <strong>${Math.round(s.power)} W</strong><br>
+          Media ${winA}s: <strong>${Math.round(rollA[best])} W</strong><br>
+          Media ${winB}s: <strong>${Math.round(rollB[best])} W</strong>`);
+    });
+
+  const meanA = rollA.reduce((a, b) => a + b, 0) / rollA.length;
+  const meanB = rollB.reduce((a, b) => a + b, 0) / rollB.length;
+  const stats = document.getElementById('powerPlanStats');
+  if (stats) {
+    stats.textContent = `A ${winA}s ≈ ${meanA.toFixed(0)} W · B ${winB}s ≈ ${meanB.toFixed(0)} W · durata ${formatTime(samples[samples.length-1].tSec/3600)}`;
+  }
+  // update legend labels
+  const leg = document.getElementById('powerPlanLegend');
+  if (leg) {
+    const spans = leg.querySelectorAll('span');
+    // 0 elev, 1 inst, 2 media A, 3 media B, 4 stats
+    if (spans[2]) spans[2].innerHTML = `<i style="background:#a646e6"></i>Media ${winA}s`;
+    if (spans[3]) spans[3].innerHTML = `<i style="background:#06b6d4"></i>Media ${winB}s`;
+  }
+}
+
+/** Esporta grafico + legenda come PNG */
+async function exportPowerPlanPng() {
+  const host = document.getElementById('powerPlanChart');
+  const legend = document.getElementById('powerPlanLegend');
+  if (!host) return;
+  const svg = host.querySelector('svg');
+  if (!svg) { alert('Apri prima il grafico.'); return; }
+
+  const svgW = parseInt(svg.getAttribute('width')) || host.clientWidth;
+  const svgH = parseInt(svg.getAttribute('height')) || 420;
+  const legH = 56;
+  const pad = 16;
+  const titleH = 36;
+  const canvas = document.createElement('canvas');
+  canvas.width = svgW + pad * 2;
+  canvas.height = titleH + svgH + legH + pad * 2;
+  const ctx = canvas.getContext('2d');
+
+  // background
+  ctx.fillStyle = '#0f172a';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // title
+  ctx.fillStyle = '#e2e8f0';
+  ctx.font = '700 16px Outfit, Inter, sans-serif';
+  ctx.fillText('Piano potenza · altimetria', pad, pad + 18);
+
+  // serialize SVG
+  const clone = svg.cloneNode(true);
+  // ensure white-ish plot bg inside export
+  const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+  bg.setAttribute('width', '100%'); bg.setAttribute('height', '100%'); bg.setAttribute('fill', '#f8fafc');
+  clone.insertBefore(bg, clone.firstChild);
+  const xml = new XMLSerializer().serializeToString(clone);
+  const svgBlob = new Blob([xml], { type: 'image/svg+xml;charset=utf-8' });
+  const url = URL.createObjectURL(svgBlob);
+
+  await new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      ctx.drawImage(img, pad, pad + titleH, svgW, svgH);
+      URL.revokeObjectURL(url);
+      resolve();
+    };
+    img.onerror = reject;
+    img.src = url;
+  });
+
+  // legend
+  const { winA, winB } = getPowerRollWindows();
+  const stats = document.getElementById('powerPlanStats')?.textContent || '';
+  const items = [
+    { color: '#94a3b8', label: 'Altimetria' },
+    { color: '#f59e0b', label: 'Potenza istantanea' },
+    { color: '#a646e6', label: `Media ${winA}s` },
+    { color: '#06b6d4', label: `Media ${winB}s` },
+  ];
+  let lx = pad;
+  const ly = pad + titleH + svgH + 22;
+  ctx.font = '500 12px Inter, sans-serif';
+  for (const it of items) {
+    ctx.fillStyle = it.color;
+    ctx.fillRect(lx, ly - 6, 18, 3);
+    ctx.fillStyle = '#cbd5e1';
+    ctx.fillText(it.label, lx + 24, ly);
+    lx += ctx.measureText(it.label).width + 48;
+  }
+  ctx.fillStyle = '#34d399';
+  ctx.font = '500 11px JetBrains Mono, monospace';
+  ctx.fillText(stats, pad, ly + 22);
+
+  canvas.toBlob((blob) => {
+    if (!blob) return;
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `power-plan-${winA}s-${winB}s.png`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    flashMessage('PNG esportato');
+  }, 'image/png');
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   const slider = document.getElementById('smoothing-slider');
   if (slider) {
@@ -1146,6 +2036,37 @@ document.addEventListener('DOMContentLoaded', () => {
       updateSmoothing(_smoothingWindow + delta);
     }, { passive: false });
   }
+  document.getElementById('modeSpeedBtn')?.addEventListener('click', () => setCalcMode('speed'));
+  document.getElementById('modePowerBtn')?.addEventListener('click', () => setCalcMode('power'));
+  document.getElementById('xferToSpeedBtn')?.addEventListener('click', transferSpeedsFromPower);
+  document.getElementById('xferToPowerBtn')?.addEventListener('click', transferPowersFromSpeed);
+  document.getElementById('cdaEstimateBtn')?.addEventListener('click', runCdaEstimate);
+  document.getElementById('cdaApplyBtn')?.addEventListener('click', applyEstimatedCda);
+  document.getElementById('paceOptimizeBtn')?.addEventListener('click', optimizePacing);
+  document.getElementById('paceOptimizeFullBtn')?.addEventListener('click', optimizePacingFull);
+  document.getElementById('openPowerChartBtn')?.addEventListener('click', openPowerPlanChart);
+  document.getElementById('powerModalCloseBtn')?.addEventListener('click', closePowerPlanChart);
+  document.getElementById('powerModalOverlay')?.addEventListener('click', (e) => {
+    if (e.target.id === 'powerModalOverlay') closePowerPlanChart();
+  });
+  document.getElementById('powerRollApplyBtn')?.addEventListener('click', () => {
+    if (document.getElementById('powerModalOverlay')?.classList.contains('open')) renderPowerPlanChart();
+  });
+  document.getElementById('powerExportImgBtn')?.addEventListener('click', () => { exportPowerPlanPng(); });
+  const refreshRoll = (clearCustomId) => {
+    if (clearCustomId) {
+      const c = document.getElementById(clearCustomId);
+      if (c) c.value = '';
+    }
+    if (document.getElementById('powerModalOverlay')?.classList.contains('open')) renderPowerPlanChart();
+  };
+  document.getElementById('powerRollSelectA')?.addEventListener('change', () => refreshRoll('powerRollCustomA'));
+  document.getElementById('powerRollSelectB')?.addEventListener('change', () => refreshRoll('powerRollCustomB'));
+
+  ['phys-rider','phys-bike','phys-cda','phys-crr','phys-rho','phys-dt','phys-wind','defaultPower'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', () => { if (routeData) updateComputedOnly(); });
+  });
 });
 
 function renderMapMarkers() {
@@ -1318,33 +2239,24 @@ function buildElevationChart(zoomDomain) {
       .style('fill', '#ffffff').style('pointer-events', 'none').text(idx + 1);
   });
 
-  // ── Etichette con il valore (numero) di ogni sezione, distanza, tempo previsto e velocità media, tra un punto e l'altro ──
+  const chartSections = computeSections();
   const segG = chartG.append('g');
   const segLabelY = 46;
-  for (let i = 1; i < points.length; i++) {
-    const from = points[i - 1], to = points[i];
-    if (to.distKm <= d0 || from.distKm >= d1) continue;
-    const segFrom = Math.max(from.distKm, d0);
-    const segTo = Math.min(to.distKm, d1);
+  for (let i = 0; i < chartSections.length; i++) {
+    const s = chartSections[i];
+    if (s.to.distKm <= d0 || s.from.distKm >= d1) continue;
+    const segFrom = Math.max(s.from.distKm, d0);
+    const segTo = Math.min(s.to.distKm, d1);
     const xMid = (xScale(segFrom) + xScale(segTo)) / 2;
-    const pxWidth = xScale(segTo) - xScale(segFrom);
-    if (pxWidth < 46) continue; // spazio troppo stretto per un'etichetta leggibile
-    const distanceKm = to.distKm - from.distKm;
-    const speed = to.speed || 0;
-    const timeHours = speed > 0 ? distanceKm / speed : 0;
+    if (xScale(segTo) - xScale(segFrom) < 46) continue;
     const lg = segG.append('g').attr('transform', `translate(${xMid},${segLabelY})`);
-    const numT = lg.append('text').attr('text-anchor', 'middle').attr('y', 0)
-      .attr('font-size', '12px').attr('font-weight', '800').style('fill', '#475569').style('pointer-events', 'none').text(i);
-    const distT = lg.append('text').attr('text-anchor', 'middle').attr('y', 12)
-      .attr('font-size', '9.5px').attr('font-weight', '600').style('fill', '#94a3b8').style('pointer-events', 'none').text(`${distanceKm.toFixed(1)} km`);
-    const timeT = lg.append('text').attr('text-anchor', 'middle').attr('y', 23)
-      .attr('font-size', '9.5px').attr('font-weight', '600').style('fill', '#94a3b8').style('pointer-events', 'none').text(formatTime(timeHours));
-    const speedT = lg.append('text').attr('text-anchor', 'middle').attr('y', 34)
-      .attr('font-size', '9.5px').attr('font-weight', '600').style('fill', '#94a3b8').style('pointer-events', 'none').text(`${speed.toFixed(1)} km/h`);
+    lg.append('text').attr('text-anchor','middle').attr('y',0).attr('font-size','12px').attr('font-weight','800').style('fill','#475569').style('pointer-events','none').text(s.index);
+    lg.append('text').attr('text-anchor','middle').attr('y',12).attr('font-size','9.5px').attr('font-weight','600').style('fill','#94a3b8').style('pointer-events','none').text(`${s.distanceKm.toFixed(1)} km`);
+    lg.append('text').attr('text-anchor','middle').attr('y',23).attr('font-size','9.5px').attr('font-weight','600').style('fill','#94a3b8').style('pointer-events','none').text(formatTime(s.timeHours));
+    lg.append('text').attr('text-anchor','middle').attr('y',34).attr('font-size','9.5px').attr('font-weight','600').style('fill','#94a3b8').style('pointer-events','none').text(`${Math.round(s.powerW)} W`);
+    lg.append('text').attr('text-anchor','middle').attr('y',45).attr('font-size','9.5px').attr('font-weight','600').style('fill','#94a3b8').style('pointer-events','none').text(`${s.speed.toFixed(1)} km/h`);
     const bbox = lg.node().getBBox();
-    lg.insert('rect', 'text')
-      .attr('x', bbox.x - 6).attr('y', bbox.y - 3).attr('width', bbox.width + 12).attr('height', bbox.height + 6)
-      .attr('rx', 7).attr('fill', '#ffffff').attr('fill-opacity', 0.82).attr('stroke', '#e5e7eb').attr('stroke-width', 1);
+    lg.insert('rect','text').attr('x',bbox.x-6).attr('y',bbox.y-3).attr('width',bbox.width+12).attr('height',bbox.height+6).attr('rx',7).attr('fill','#ffffff').attr('fill-opacity',0.82).attr('stroke','#e5e7eb').attr('stroke-width',1);
   }
 
   // ── Tooltip hover ──
@@ -1518,26 +2430,34 @@ function computeGainLossBetween(fromKm, toKm) {
 function computeSections() {
   const sections = [];
   let cumDist = 0, cumTime = 0, cumGain = 0, cumLoss = 0, cumNetElev = 0;
+  let cumWork = 0; // Wh (potenza * tempo)
+  const params = getPhysParams();
+  const defPower = parseFloat(document.getElementById('defaultPower')?.value) || 250;
   for (let i = 1; i < points.length; i++) {
     const from = points[i - 1], to = points[i];
     const { gain, loss } = computeGainLossBetween(from.distKm, to.distKm);
     const distanceKm = to.distKm - from.distKm;
     const netElev = getInterpolatedPoint(to.distKm).ele - getInterpolatedPoint(from.distKm).ele;
     const gradient = distanceKm > 0 ? (netElev / (distanceKm * 1000)) * 100 : 0;
-    const speed = to.speed || 0;
-    const timeHours = speed > 0 ? distanceKm / speed : 0;
-    // VAM basata sul dislivello NETTO (come la pendenza): su un anello chiuso è 0
-    // anche se nel mezzo si sale e scende molto, perché quota iniziale = quota finale.
+    let speed, powerW, timeHours;
+    if (calcMode === 'power') {
+      powerW = (to.power != null && !isNaN(to.power)) ? to.power : defPower;
+      speed = speedFromPower(powerW, gradient, params) * 3.6;
+      to._computedSpeed = speed;
+      timeHours = speed > 0.1 ? distanceKm / speed : 0;
+    } else {
+      speed = to.speed || 0;
+      powerW = powerFromSpeed(speed / 3.6, gradient, params);
+      to._computedPower = powerW;
+      timeHours = speed > 0 ? distanceKm / speed : 0;
+    }
     const vam = timeHours > 0 ? netElev / timeHours : 0;
-
-    cumDist += distanceKm;
-    cumTime += timeHours;
-    cumGain += gain;
-    cumLoss += loss;
-    cumNetElev += netElev;
+    cumDist += distanceKm; cumTime += timeHours; cumGain += gain; cumLoss += loss; cumNetElev += netElev;
+    cumWork += powerW * timeHours; // W * h = Wh
     const cumAvgSpeed = cumTime > 0 ? cumDist / cumTime : 0;
-
-    sections.push({ index: i, from, to, distanceKm, gain, loss, gradient, speed, timeHours, vam, netElev, cumDist, cumTime, cumGain, cumLoss, cumNetElev, cumAvgSpeed });
+    const cumAvgPower = cumTime > 0 ? cumWork / cumTime : 0; // media pesata sul tempo
+    sections.push({ index:i, from, to, distanceKm, gain, loss, gradient, speed, powerW, timeHours, vam, netElev,
+      cumDist, cumTime, cumGain, cumLoss, cumNetElev, cumAvgSpeed, cumAvgPower, cumWork });
   }
   return sections;
 }
@@ -1568,21 +2488,30 @@ function renderTable() {
   const sections = computeSections();
   const tbody = document.getElementById('sectionsTbody');
   if (sections.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="15" class="empty-state">Nessuna sezione: carica un GPX per iniziare.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="17" class="empty-state">Nessuna sezione: carica un GPX per iniziare.</td></tr>`;
     document.getElementById('sectionsTfoot').innerHTML = '';
     return;
   }
   const rows = sections.map((s) => {
     const removable = !s.to.fixed;
-    const adjustCell = removable ? `
-      <div class="adjust-group">
-        <button class="adjust-btn big" data-id="${s.to.id}" data-delta="-100" title="-100 m">−100</button>
-        <button class="adjust-btn" data-id="${s.to.id}" data-delta="-10" title="-10 m">−10</button>
-        <button class="adjust-btn" data-id="${s.to.id}" data-delta="10" title="+10 m">+10</button>
-        <button class="adjust-btn big" data-id="${s.to.id}" data-delta="100" title="+100 m">+100</button>
+    const adjustCell = removable ? `<div class="adjust-group">
+        <button class="adjust-btn big" data-id="${s.to.id}" data-delta="-100">−100</button>
+        <button class="adjust-btn" data-id="${s.to.id}" data-delta="-10">−10</button>
+        <button class="adjust-btn" data-id="${s.to.id}" data-delta="10">+10</button>
+        <button class="adjust-btn big" data-id="${s.to.id}" data-delta="100">+100</button>
       </div>` : '<span style="color:var(--text-muted);font-size:0.72rem;">fisso</span>';
-    return `
-      <tr>
+    let powerCell, speedCell;
+    if (calcMode === 'power') {
+      const pw = (s.to.power != null && !isNaN(s.to.power)) ? s.to.power : (parseFloat(document.getElementById('defaultPower')?.value) || 250);
+      powerCell = `<td class="col-power"><input type="number" min="0" step="1" value="${Math.round(pw)}" data-id="${s.to.id}" class="power-input"/></td>`;
+      speedCell = `<td class="calc" id="speed-cell-${s.to.id}">${s.speed.toFixed(1)} km/h</td>`;
+    } else {
+      // modalità velocità: potenza richiesta calcolata (sola lettura)
+      powerCell = `<td class="col-power calc" id="power-cell-${s.to.id}">${Math.round(s.powerW)} W</td>`;
+      speedCell = `<td><input type="number" min="0.1" step="0.1" value="${s.speed}" data-id="${s.to.id}" class="speed-input"/></td>`;
+    }
+    const cumPowCell = `<td class="col-power-cum calc" id="cumpower-cell-${s.to.id}">${Math.round(s.cumAvgPower)} W</td>`;
+    return `<tr>
         <td><span class="seg-num">${s.index}</span></td>
         <td><input type="text" value="${s.to.sectionLabel || ''}" data-id="${s.to.id}" class="label-input"/></td>
         <td class="range">${s.from.distKm.toFixed(2)} → ${s.to.distKm.toFixed(2)} km</td>
@@ -1590,67 +2519,51 @@ function renderTable() {
         <td class="calc dist">${s.distanceKm.toFixed(2)} km</td>
         <td class="calc gain">+${Math.round(s.gain)} m</td>
         <td class="calc loss">−${Math.round(s.loss)} m</td>
-        <td class="calc cum" id="cumelev-cell-${s.to.id}">+${Math.round(s.cumGain)} / −${Math.round(s.cumLoss)} m</td>
+        <td class="calc cum">+${Math.round(s.cumGain)} / −${Math.round(s.cumLoss)} m</td>
         <td class="calc">${gradeText(s.gradient)}</td>
         <td class="calc vam" id="vam-cell-${s.to.id}">${s.timeHours > 0 ? (s.vam >= 0 ? '+' : '') + Math.round(s.vam) + ' m/h' : '—'}</td>
-        <td><input type="number" min="0.1" step="0.1" value="${s.speed}" data-id="${s.to.id}" class="speed-input"/></td>
+        ${powerCell}${cumPowCell}${speedCell}
         <td class="calc cum" id="cumspeed-cell-${s.to.id}">${s.cumAvgSpeed.toFixed(1)} km/h</td>
         <td class="calc time" id="time-cell-${s.to.id}">${formatTime(s.timeHours)}</td>
         <td class="calc cum" id="cumtime-cell-${s.to.id}">${formatTime(s.cumTime)}</td>
-        <td>${removable ? `<button class="remove-btn" data-id="${s.to.id}" title="Rimuovi punto">✕</button>` : ''}</td>
-      </tr>
-    `;
+        <td>${removable ? `<button class="remove-btn" data-id="${s.to.id}">✕</button>` : ''}</td>
+      </tr>`;
   }).join('');
   tbody.innerHTML = rows;
-
-  const last = sections[sections.length - 1];
-  const totalGain = sections.reduce((s, x) => s + x.gain, 0);
-  const totalLoss = sections.reduce((s, x) => s + x.loss, 0);
-  document.getElementById('sectionsTfoot').innerHTML = `
-    <tr class="tfoot-row">
+  const last = sections[sections.length-1];
+  const totalGain = sections.reduce((s,x)=>s+x.gain,0);
+  const totalLoss = sections.reduce((s,x)=>s+x.loss,0);
+  document.getElementById('sectionsTfoot').innerHTML = `<tr class="tfoot-row">
       <td colspan="4">Totale</td>
       <td class="calc dist">${routeData.distanceKm.toFixed(2)} km</td>
       <td class="calc gain">+${Math.round(totalGain)} m</td>
       <td class="calc loss">−${Math.round(totalLoss)} m</td>
-      <td class="calc" id="tfoot-cumelev">+${Math.round(last.cumGain)} / −${Math.round(last.cumLoss)} m</td>
-      <td></td>
-      <td></td>
+      <td class="calc">+${Math.round(last.cumGain)} / −${Math.round(last.cumLoss)} m</td>
+      <td></td><td></td>
+      <td class="col-power"></td>
+      <td class="col-power-cum calc" id="tfoot-cumpower">${Math.round(last.cumAvgPower)} W</td>
       <td></td>
       <td class="calc" id="tfoot-cumspeed">${last.cumAvgSpeed.toFixed(1)} km/h</td>
-      <td class="calc time" id="tfoot-time">${formatTime(last.timeHours)}</td>
-      <td class="calc time" id="tfoot-cumtime">${formatTime(last.cumTime)}</td>
-      <td></td>
-    </tr>
-  `;
-
-  tbody.querySelectorAll('.label-input').forEach(inp => {
-    inp.addEventListener('input', (e) => {
-      const p = points.find(pt => pt.id === parseInt(e.target.dataset.id));
-      if (p) p.sectionLabel = e.target.value;
-      renderMapMarkers();
-    });
-  });
-  tbody.querySelectorAll('.speed-input').forEach(inp => {
-    inp.addEventListener('input', (e) => {
-      const p = points.find(pt => pt.id === parseInt(e.target.dataset.id));
-      if (p) p.speed = parseFloat(e.target.value) || 0;
-      updateComputedOnly();
-    });
-  });
-  tbody.querySelectorAll('.remove-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      const id = parseInt(e.target.dataset.id);
-      const idx = points.findIndex(p => p.id === id);
-      if (confirm(`Rimuovere il punto ${idx + 1}?`)) removeBreakpoint(id);
-    });
-  });
-  tbody.querySelectorAll('.adjust-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      const id = parseInt(e.currentTarget.dataset.id);
-      const delta = parseFloat(e.currentTarget.dataset.delta);
-      adjustBreakpoint(id, delta);
-    });
-  });
+      <td class="calc time" id="tfoot-time">${formatTime(last.cumTime)}</td>
+      <td class="calc time" id="tfoot-cumtime">${formatTime(last.cumTime)}</td><td></td></tr>`;
+  tbody.querySelectorAll('.label-input').forEach(inp => inp.addEventListener('input', e => {
+    const p = points.find(pt => pt.id === parseInt(e.target.dataset.id));
+    if (p) p.sectionLabel = e.target.value; renderMapMarkers();
+  }));
+  tbody.querySelectorAll('.speed-input').forEach(inp => inp.addEventListener('input', e => {
+    const p = points.find(pt => pt.id === parseInt(e.target.dataset.id));
+    if (p) p.speed = parseFloat(e.target.value)||0; updateComputedOnly();
+  }));
+  tbody.querySelectorAll('.power-input').forEach(inp => inp.addEventListener('input', e => {
+    const p = points.find(pt => pt.id === parseInt(e.target.dataset.id));
+    if (p) p.power = parseFloat(e.target.value)||0; updateComputedOnly();
+  }));
+  tbody.querySelectorAll('.remove-btn').forEach(btn => btn.addEventListener('click', e => {
+    if (confirm('Rimuovere punto?')) removeBreakpoint(parseInt(e.target.dataset.id));
+  }));
+  tbody.querySelectorAll('.adjust-btn').forEach(btn => btn.addEventListener('click', e => {
+    adjustBreakpoint(parseInt(e.currentTarget.dataset.id), parseFloat(e.currentTarget.dataset.delta));
+  }));
 }
 
 function updateComputedOnly() {
@@ -1664,17 +2577,23 @@ function updateComputedOnly() {
     if (cumSpeedCell) cumSpeedCell.textContent = s.cumAvgSpeed.toFixed(1) + ' km/h';
     const vamCell = document.getElementById('vam-cell-' + s.to.id);
     if (vamCell) vamCell.textContent = s.timeHours > 0 ? (s.vam >= 0 ? '+' : '') + Math.round(s.vam) + ' m/h' : '—';
+    const speedCell = document.getElementById('speed-cell-' + s.to.id);
+    if (speedCell) speedCell.textContent = s.speed.toFixed(1) + ' km/h';
+    const powerCell = document.getElementById('power-cell-' + s.to.id);
+    if (powerCell) powerCell.textContent = Math.round(s.powerW) + ' W';
+    const cumPowCell = document.getElementById('cumpower-cell-' + s.to.id);
+    if (cumPowCell) cumPowCell.textContent = Math.round(s.cumAvgPower) + ' W';
   });
   const last = sections[sections.length - 1];
   const tfootTime = document.getElementById('tfoot-time');
-  if (tfootTime) tfootTime.textContent = formatTime(last.timeHours);
+  if (tfootTime) tfootTime.textContent = formatTime(last.cumTime);
   const tfootCumTime = document.getElementById('tfoot-cumtime');
   if (tfootCumTime) tfootCumTime.textContent = formatTime(last.cumTime);
   const tfootCumSpeed = document.getElementById('tfoot-cumspeed');
   if (tfootCumSpeed) tfootCumSpeed.textContent = last.cumAvgSpeed.toFixed(1) + ' km/h';
+  const tfootCumPow = document.getElementById('tfoot-cumpower');
+  if (tfootCumPow) tfootCumPow.textContent = Math.round(last.cumAvgPower) + ' W';
   renderStats(sections);
-  // Le etichette di sezione sul grafico (tempo/velocità previsti) dipendono
-  // dalla velocità impostata: ricostruiamo il grafico mantenendo lo zoom attivo.
   buildElevationChart(window._currentZoomDomain);
 }
 
@@ -1692,5 +2611,48 @@ window.addEventListener('resize', () => {
   resizeTimer = setTimeout(() => { if (routeData) { buildElevationChart(window._currentZoomDomain || null); if (map) map.invalidateSize(); } }, 250);
 });
 </script>
+
+<div class="power-modal-overlay" id="powerModalOverlay">
+  <div class="power-modal">
+    <div class="power-modal-header">
+      <h2>📈 Piano potenza · altimetria</h2>
+      <div class="power-modal-controls">
+        <label>Media A</label>
+        <select id="powerRollSelectA">
+          <option value="30">30 s</option>
+          <option value="60">60 s</option>
+          <option value="120" selected>120 s</option>
+          <option value="300">300 s</option>
+          <option value="720">720 s</option>
+          <option value="1200">1200 s</option>
+        </select>
+        <label>Media B</label>
+        <select id="powerRollSelectB">
+          <option value="30">30 s</option>
+          <option value="60">60 s</option>
+          <option value="120">120 s</option>
+          <option value="300" selected>300 s</option>
+          <option value="720">720 s</option>
+          <option value="1200">1200 s</option>
+        </select>
+        <label>custom A/B (s)</label>
+        <input type="number" id="powerRollCustomA" min="30" max="1200" step="10" placeholder="A" style="width:70px"/>
+        <input type="number" id="powerRollCustomB" min="30" max="1200" step="10" placeholder="B" style="width:70px"/>
+        <button class="btn btn-sm" type="button" id="powerRollApplyBtn">Applica</button>
+        <button class="btn btn-sm" type="button" id="powerExportImgBtn" style="background:linear-gradient(135deg,#34d399,#06b6d4);color:#0a0e1a;border:none;font-weight:700">⬇ PNG</button>
+        <button class="btn btn-sm ghost" type="button" id="powerModalCloseBtn">Chiudi</button>
+      </div>
+    </div>
+    <div id="powerPlanChart"></div>
+    <div class="power-modal-legend" id="powerPlanLegend">
+      <span><i style="background:#94a3b8"></i>Altimetria</span>
+      <span><i style="background:#f59e0b"></i>Potenza istantanea</span>
+      <span><i style="background:#a646e6"></i>Media A</span>
+      <span><i style="background:#06b6d4"></i>Media B</span>
+      <span id="powerPlanStats" style="color:var(--accent4)"></span>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>
