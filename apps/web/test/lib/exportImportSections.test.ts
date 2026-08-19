@@ -12,6 +12,7 @@ const plan: SectionPlan = {
   calcMode: 'speed',
   defaultSpeedKmh: 40,
   defaultPowerWatts: 250,
+  windZones: [],
   breakpoints: [
     { id: 'start', distKm: 0, fixed: 'start', sectionLabel: null, speedKmh: null, powerWatts: null },
     { id: 'mid', distKm: 10, fixed: false, sectionLabel: 'S1', speedKmh: 35, powerWatts: null },
@@ -65,5 +66,36 @@ describe('parseSectionsImport', () => {
 
   it('rifiuta una struttura senza il campo points', () => {
     expect(() => parseSectionsImport('{"foo":"bar"}', 20, 40)).toThrow(/struttura sezioni/);
+  });
+});
+
+describe('parseSectionsImport — zone vento', () => {
+  const windPlan: SectionPlan = {
+    ...plan,
+    windZones: [
+      { id: 'w1', distKm: 0, fixed: 'start', speedKmh: null, directionDeg: null },
+      { id: 'w2', distKm: 10, fixed: false, speedKmh: 15, directionDeg: 90 },
+      { id: 'w3', distKm: 20, fixed: 'finish', speedKmh: 25, directionDeg: 270 }
+    ]
+  };
+
+  it('round-trip: le zone vento sopravvivono a export+import', () => {
+    const payload = buildSectionsExportPayload('Con vento', 20, windPlan);
+    const parsed = parseSectionsImport(JSON.stringify(payload), 20, 40);
+    expect(parsed.windZones).toHaveLength(3);
+    expect(parsed.windZones![1]).toMatchObject({ speedKmh: 15, directionDeg: 90, distKm: 10 });
+    expect(parsed.windZones![2]).toMatchObject({ speedKmh: 25, directionDeg: 270 });
+  });
+
+  it('un file senza windZones non tocca il vento esistente (torna null, non [])', () => {
+    const legacyPayload = {
+      type: 'routesplitter-sections',
+      points: [
+        { distKm: 0, fixed: 'start', sectionLabel: null, speed: null, power: null },
+        { distKm: 20, fixed: 'finish', sectionLabel: 'S1', speed: 40, power: null }
+      ]
+    };
+    const parsed = parseSectionsImport(JSON.stringify(legacyPayload), 20, 40);
+    expect(parsed.windZones).toBeNull();
   });
 });

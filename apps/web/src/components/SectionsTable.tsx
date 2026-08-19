@@ -11,6 +11,18 @@ interface SectionsTableProps {
   onRemove: (id: string) => void;
 }
 
+function windBadge(headwindKmh: number) {
+  if (Math.abs(headwindKmh) < 0.5) {
+    return <span className="wind-badge wind-badge-neutral">— </span>;
+  }
+  const isHeadwind = headwindKmh > 0;
+  return (
+    <span className={`wind-badge ${isHeadwind ? 'wind-badge-head' : 'wind-badge-tail'}`}>
+      {isHeadwind ? '↑' : '↓'} {Math.abs(headwindKmh).toFixed(1)} km/h
+    </span>
+  );
+}
+
 export function SectionsTable({ sections, calcMode, onUpdateLabel, onUpdateSpeed, onUpdatePower, onRemove }: SectionsTableProps) {
   if (sections.length === 0) {
     return <p className="sections-table-empty">Nessuna sezione: aggiungi un punto sulla mappa o sul grafico.</p>;
@@ -32,6 +44,7 @@ export function SectionsTable({ sections, calcMode, onUpdateLabel, onUpdateSpeed
             <th>D+</th>
             <th>D−</th>
             <th>Pend.</th>
+            <th>Vento</th>
             <th>VAM</th>
             {calcMode === 'power' ? <th>Potenza</th> : <th>Potenza (calc.)</th>}
             <th>Pot. media cum.</th>
@@ -65,6 +78,7 @@ export function SectionsTable({ sections, calcMode, onUpdateLabel, onUpdateSpeed
                   {s.gradient >= 0 ? '+' : ''}
                   {s.gradient.toFixed(1)}%
                 </td>
+                <td className="mono wind-cell">{windBadge(s.windHeadwindKmh)}</td>
                 <td className="mono vam">{s.timeHours > 0 ? `${s.vam >= 0 ? '+' : ''}${Math.round(s.vam)} m/h` : '—'}</td>
                 {calcMode === 'power' ? (
                   <td>
@@ -95,7 +109,7 @@ export function SectionsTable({ sections, calcMode, onUpdateLabel, onUpdateSpeed
             <td className="mono dist">{last.cumDistKm.toFixed(2)} km</td>
             <td className="mono gain">+{Math.round(totalGain)} m</td>
             <td className="mono loss">−{Math.round(totalLoss)} m</td>
-            <td colSpan={2} />
+            <td colSpan={3} />
             <td />
             <td className="mono">{Math.round(last.cumAvgPowerWatts)} W</td>
             <td />

@@ -21,7 +21,13 @@ export const PhysicsParamsSchema = z.object({
   airDensity: z.number().min(0.7).max(1.35),
   /** Perdita drivetrain, in percento (es. 2 = 2%). Catena pulita/sporca. */
   drivetrainLossPct: z.number().min(0).max(10),
-  /** Vento, km/h, positivo = contrario (in testa). Range ampio per condizioni estreme. */
+  /**
+   * Vento, km/h, positivo = contrario (in testa). Range ampio per condizioni estreme.
+   * NOTA: per i calcoli sul percorso (tabella sezioni, report, ecc.) questo campo NON è più
+   * la fonte del vento — è sovrascritto per-sezione dalle zone vento direzionali (pannello
+   * 💨 Vento, physics-core/wind.ts), che tengono conto della rotta del tracciato. Resta usato
+   * com'è solo dallo stimatore CdA (un calcolo puntuale, non legato al percorso).
+   */
   windKmh: z.number().min(-120).max(120)
 });
 export type PhysicsParams = z.infer<typeof PhysicsParamsSchema>;

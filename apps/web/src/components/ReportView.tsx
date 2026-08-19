@@ -29,6 +29,16 @@ function gradeText(gradient: number) {
   );
 }
 
+function windText(headwindKmh: number) {
+  if (Math.abs(headwindKmh) < 0.5) return <span style={{ color: '#9ca3af' }}>—</span>;
+  const isHeadwind = headwindKmh > 0;
+  return (
+    <span style={{ color: isHeadwind ? '#ef4444' : '#22c55e', fontWeight: 700 }}>
+      {isHeadwind ? '↑' : '↓'} {Math.abs(headwindKmh).toFixed(1)}
+    </span>
+  );
+}
+
 function clockTimeAfter(startTime: string, hoursFromStart: number): string | null {
   if (!startTime) return null;
   const [sh, sm] = startTime.split(':').map(Number);
@@ -164,6 +174,7 @@ export function ReportView({ route, sections, points, breakpoints, smoothingRadi
             <th>Da → A</th>
             <th>Distanza</th>
             <th>Pend. media</th>
+            <th>Vento</th>
             <th>Dislivello</th>
             <th>VAM</th>
             <th>Vel. media</th>
@@ -185,6 +196,7 @@ export function ReportView({ route, sections, points, breakpoints, smoothingRadi
                 </td>
                 <td>{s.distanceKm.toFixed(2)} km</td>
                 <td>{gradeText(s.gradient)}</td>
+                <td>{windText(s.windHeadwindKmh)}</td>
                 <td>
                   +{Math.round(s.gain)} / −{Math.round(s.loss)} m
                 </td>
@@ -204,6 +216,7 @@ export function ReportView({ route, sections, points, breakpoints, smoothingRadi
           <tr>
             <td colSpan={3}>Totale</td>
             <td>{route.distanceKm.toFixed(2)} km</td>
+            <td />
             <td />
             <td>
               +{Math.round(totalGain)} / −{Math.round(totalLoss)} m

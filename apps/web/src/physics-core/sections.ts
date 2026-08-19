@@ -1,5 +1,6 @@
 import { speedFromPower, powerFromSpeed } from './physics.js';
 import { computeGainLossBetween, getInterpolatedPoint, type ProcessedPoint } from './geo.js';
+import { windAtDistKm, routeBearingAtDistKm, effectiveHeadwindKmh, type WindZoneBoundary } from './wind.js';
 import type { PhysicsParams } from './types.js';
 
 /**
@@ -38,6 +39,11 @@ export interface SectionResult {
   cumAvgSpeedKmh: number;
   /** Potenza media cumulata, pesata sul TEMPO (non sulla distanza), in W. */
   cumAvgPowerWatts: number;
+  /**
+   * Componente di vento efficace lungo la direzione di marcia in questa sezione, km/h.
+   * Positivo = in testa, negativo = in coda. 0 se non sono definite zone vento.
+   */
+  windHeadwindKmh: number;
 }
 
 /**
@@ -52,7 +58,8 @@ export function computeSections(
   routePoints: ProcessedPoint[],
   params: PhysicsParams,
   calcMode: CalcMode,
-  defaultPowerWatts = 250
+  defaultPowerWatts = 250,
+  windZones?: WindZoneBoundary[]
 ): SectionResult[] {
   const sorted = [...breakpoints].sort((a, b) => a.distKm - b.distKm);
   const results: SectionResult[] = [];
@@ -72,16 +79,35 @@ export function computeSections(
     const netElev = eleTo - eleFrom;
     const gradient = distanceKm > 0 ? (netElev / (distanceKm * 1000)) * 100 : 0;
 
+    // Se sono definite zone vento, la componente efficace (in testa/in coda) rimpiazza il
+    // parametro scalare params.windKmh per QUESTA sezione, confrontando la direzione del
+    // vento con la rotta media del tracciato nel tratto — altrimenti si usa params.windKmh
+    // così com'è (comportamento storico, usato anche dallo stimatore CdA).
+    let windHeadwindKmh = params.windKmh;
+    let effectiveParams = params;
+    if (windZones && windZones.length >= 2) {
+      const midKm = (from.distKm + to.distKm) / 2;
+      const wind = windAtDistKm(windZones, midKm);
+      if (wind) {
+        const bearing = routeBearingAtDistKm(routePoints, midKm);
+        windHeadwindKmh = effectiveHeadwindKmh(wind.speedKmh, wind.directionDeg, bearing);
+        effectiveParams = { ...params, windKmh: windHeadwindKmh };
+      } else {
+        windHeadwindKmh = 0;
+        effectiveParams = { ...params, windKmh: 0 };
+      }
+    }
+
     let speedKmh: number;
     let powerWatts: number;
     let timeHours: number;
     if (calcMode === 'power') {
       powerWatts = to.powerWatts ?? defaultPowerWatts;
-      speedKmh = speedFromPower(powerWatts, gradient, params) * 3.6;
+      speedKmh = speedFromPower(powerWatts, gradient, effectiveParams) * 3.6;
       timeHours = speedKmh > 0.1 ? distanceKm / speedKmh : 0;
     } else {
       speedKmh = to.speedKmh ?? 0;
-      powerWatts = powerFromSpeed(speedKmh / 3.6, gradient, params);
+      powerWatts = powerFromSpeed(speedKmh / 3.6, gradient, effectiveParams);
       timeHours = speedKmh > 0 ? distanceKm / speedKmh : 0;
     }
 
@@ -111,7 +137,8 @@ export function computeSections(
       cumGain,
       cumLoss,
       cumAvgSpeedKmh,
-      cumAvgPowerWatts
+      cumAvgPowerWatts,
+      windHeadwindKmh
     });
   }
   return results;

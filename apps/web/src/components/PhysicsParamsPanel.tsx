@@ -14,8 +14,7 @@ const FIELDS: Array<{ key: keyof PhysicsParams; label: string; step: number }> =
   { key: 'cda', label: 'CdA (m²)', step: 0.005 },
   { key: 'crr', label: 'Crr', step: 0.0005 },
   { key: 'airDensity', label: 'Densità aria (kg/m³)', step: 0.001 },
-  { key: 'drivetrainLossPct', label: 'Drivetrain loss (%)', step: 0.1 },
-  { key: 'windKmh', label: 'Vento km/h (+testa)', step: 0.5 }
+  { key: 'drivetrainLossPct', label: 'Drivetrain loss (%)', step: 0.1 }
 ];
 
 export function PhysicsParamsPanel({ params, onChange, calcMode, onCalcModeChange }: PhysicsParamsPanelProps) {
@@ -42,7 +41,8 @@ export function PhysicsParamsPanel({ params, onChange, calcMode, onCalcModeChang
       </div>
       <p className="physics-hint">
         <strong>Velocità</strong>: inserisci km/h per sezione → la tabella mostra la potenza richiesta.{' '}
-        <strong>Potenza</strong>: inserisci i watt → la tabella mostra la velocità risultante.
+        <strong>Potenza</strong>: inserisci i watt → la tabella mostra la velocità risultante. Il vento si imposta
+        nel pannello 💨 Vento qui sotto (varia per direzione lungo il percorso).
       </p>
     </div>
   );

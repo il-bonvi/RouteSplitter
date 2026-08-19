@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useDataStore } from '../lib/DataStoreContext.js';
-import type { SectionPlan, Breakpoint, CreateSectionPlanInput } from '@shared-schema';
+import type { SectionPlan, Breakpoint, CreateSectionPlanInput, WindZoneBoundary } from '@shared-schema';
 
 const MIN_BREAKPOINT_SEP_KM = 0.005; // 5 m
+const MIN_WIND_ZONE_SEP_KM = 0.05; // 50 m — zone vento più larghe dei breakpoint di sezione
 
 function makeDefaultBreakpoints(distanceKm: number, defaultSpeedKmh: number, defaultPowerWatts: number): Breakpoint[] {
   return [
@@ -13,6 +14,10 @@ function makeDefaultBreakpoints(distanceKm: number, defaultSpeedKmh: number, def
 
 function generateBreakpointId(): string {
   return `bp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function generateWindZoneId(): string {
+  return `wz-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 /** Riassegna le etichette "S1", "S2"... alle sezioni senza nome personalizzato, in ordine di distanza. */
@@ -187,6 +192,84 @@ export function useSectionPlan(routeId: string | null, distanceKm: number) {
     [plan, save]
   );
 
+  /**
+   * Divide la zona vento che copre distKm in due, inserendo un nuovo confine con lo STESSO
+   * vento della zona che sta dividendo (così l'utente parte da un valore coerente e poi lo
+   * personalizza, invece di trovarsi improvvisamente una zona a vento zero in mezzo al percorso).
+   * Se non c'è ancora nessuna zona vento, la crea uniforme (0 km/h) su tutto il percorso.
+   */
+  const addWindZoneBoundary = useCallback(
+    async (distKm: number) => {
+      if (!plan) return;
+      const clamped = Math.max(0, Math.min(distanceKm, distKm));
+      if (plan.windZones.length < 2) {
+        await save({
+          windZones: [
+            { id: generateWindZoneId(), distKm: 0, fixed: 'start', speedKmh: null, directionDeg: null },
+            { id: generateWindZoneId(), distKm: distanceKm, fixed: 'finish', speedKmh: 0, directionDeg: 0 }
+          ]
+        });
+        return;
+      }
+      const tooClose = plan.windZones.some(z => Math.abs(z.distKm - clamped) < MIN_WIND_ZONE_SEP_KM);
+      if (tooClose) return;
+      const sorted = [...plan.windZones].sort((a, b) => a.distKm - b.distKm);
+      let covering = sorted[sorted.length - 1]!;
+      for (let i = 1; i < sorted.length; i++) {
+        if (clamped <= sorted[i]!.distKm) {
+          covering = sorted[i]!;
+          break;
+        }
+      }
+      const newZone: WindZoneBoundary = {
+        id: generateWindZoneId(),
+        distKm: clamped,
+        fixed: false,
+        speedKmh: covering.speedKmh ?? 0,
+        directionDeg: covering.directionDeg ?? 0
+      };
+      const merged = [...plan.windZones, newZone].sort((a, b) => a.distKm - b.distKm);
+      await save({ windZones: merged });
+    },
+    [plan, save, distanceKm]
+  );
+
+  const removeWindZoneBoundary = useCallback(
+    async (id: string) => {
+      if (!plan) return;
+      const filtered = plan.windZones.filter(z => z.id !== id);
+      await save({ windZones: filtered });
+    },
+    [plan, save]
+  );
+
+  const updateWindZone = useCallback(
+    async (id: string, patch: Partial<Pick<WindZoneBoundary, 'speedKmh' | 'directionDeg'>>) => {
+      if (!plan) return;
+      const updated = plan.windZones.map(z => (z.id === id ? { ...z, ...patch } : z));
+      await save({ windZones: updated });
+    },
+    [plan, save]
+  );
+
+  /** Torna a una singola zona vento uniforme su tutto il percorso, mantenendo l'ultimo valore impostato. */
+  const resetWindZones = useCallback(async () => {
+    if (!plan) return;
+    const last = plan.windZones[plan.windZones.length - 1];
+    await save({
+      windZones: [
+        { id: generateWindZoneId(), distKm: 0, fixed: 'start', speedKmh: null, directionDeg: null },
+        { id: generateWindZoneId(), distKm: distanceKm, fixed: 'finish', speedKmh: last?.speedKmh ?? 0, directionDeg: last?.directionDeg ?? 0 }
+      ]
+    });
+  }, [plan, save, distanceKm]);
+
+  /** Azzera del tutto le zone vento (equivalente a "vento non configurato"). */
+  const clearWindZones = useCallback(async () => {
+    if (!plan) return;
+    await save({ windZones: [] });
+  }, [plan, save]);
+
   return {
     plan,
     loading,
@@ -199,6 +282,11 @@ export function useSectionPlan(routeId: string | null, distanceKm: number) {
     setDefaultPowerWatts,
     resetBreakpoints,
     applyPowerUpdates,
-    replaceBreakpoints
+    replaceBreakpoints,
+    addWindZoneBoundary,
+    removeWindZoneBoundary,
+    updateWindZone,
+    resetWindZones,
+    clearWindZones
   };
 }

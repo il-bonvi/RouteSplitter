@@ -1,4 +1,4 @@
-import type { Breakpoint, CalcMode, SectionPlan } from '@shared-schema';
+import type { Breakpoint, CalcMode, SectionPlan, WindZoneBoundary } from '@shared-schema';
 
 export interface SectionsExportPayload {
   type: 'routesplitter-sections';
@@ -9,6 +9,8 @@ export interface SectionsExportPayload {
   defaultSpeed: number;
   points: Array<{ distKm: number; fixed: Breakpoint['fixed']; sectionLabel: string | null; speed: number | null; power: number | null }>;
   calcMode: CalcMode;
+  /** Zone vento — campo aggiunto dopo il formato originale; assente nei file esportati prima. */
+  windZones?: Array<{ distKm: number; fixed: WindZoneBoundary['fixed']; speedKmh: number | null; directionDeg: number | null }>;
 }
 
 /** Stesso formato del prototipo originale (chiavi `speed`/`power`, non `speedKmh`/`powerWatts`). */
@@ -27,7 +29,13 @@ export function buildSectionsExportPayload(routeName: string, routeDistanceKm: n
       speed: p.speedKmh,
       power: p.powerWatts
     })),
-    calcMode: plan.calcMode
+    calcMode: plan.calcMode,
+    windZones: plan.windZones.map(z => ({
+      distKm: z.distKm,
+      fixed: z.fixed,
+      speedKmh: z.speedKmh,
+      directionDeg: z.directionDeg
+    }))
   };
 }
 
@@ -37,6 +45,28 @@ export interface ParsedSectionsImport {
   defaultSpeedKmh: number | null;
   routeName: string | null;
   routeDistanceKm: number | null;
+  /** null = il file non conteneva zone vento (non tocca quelle esistenti); [] = vento esplicitamente azzerato. */
+  windZones: WindZoneBoundary[] | null;
+}
+
+function parseWindZonesImport(raw: unknown, currentDistanceKm: number): WindZoneBoundary[] | null {
+  if (!Array.isArray(raw)) return null;
+  const zones: WindZoneBoundary[] = raw
+    .map((entry, i) => {
+      const e = entry as Record<string, unknown>;
+      const distKm = Math.min(Math.max(0, Number(e.distKm) || 0), currentDistanceKm);
+      const fixedRaw = e.fixed;
+      const fixed: WindZoneBoundary['fixed'] = fixedRaw === 'start' || fixedRaw === 'finish' ? fixedRaw : false;
+      const speedKmh = e.speedKmh != null && Number.isFinite(Number(e.speedKmh)) ? Number(e.speedKmh) : null;
+      const directionDeg = e.directionDeg != null && Number.isFinite(Number(e.directionDeg)) ? Number(e.directionDeg) : null;
+      return { id: `wz-import-${i}-${Date.now().toString(36)}`, distKm, fixed, speedKmh, directionDeg };
+    })
+    .sort((a, b) => a.distKm - b.distKm);
+  if (zones.length === 0) return [];
+  if (zones[0]!.fixed !== 'start' || zones[zones.length - 1]!.fixed !== 'finish') return null;
+  zones[0] = { ...zones[0]!, distKm: 0, speedKmh: null, directionDeg: null };
+  zones[zones.length - 1] = { ...zones[zones.length - 1]!, distKm: currentDistanceKm };
+  return zones;
 }
 
 /**
@@ -117,6 +147,7 @@ export function parseSectionsImport(jsonText: string, currentDistanceKm: number,
     calcMode: p.calcMode === 'power' || p.calcMode === 'speed' ? (p.calcMode as CalcMode) : null,
     defaultSpeedKmh: typeof p.defaultSpeed === 'number' ? p.defaultSpeed : null,
     routeName: typeof p.routeName === 'string' && p.routeName.trim() ? p.routeName.trim() : null,
-    routeDistanceKm: typeof p.routeDistanceKm === 'number' ? p.routeDistanceKm : null
+    routeDistanceKm: typeof p.routeDistanceKm === 'number' ? p.routeDistanceKm : null,
+    windZones: parseWindZonesImport(p.windZones, currentDistanceKm)
   };
 }

@@ -9,6 +9,7 @@ import { buildSectionsExportPayload, parseSectionsImport } from '../lib/exportIm
 import { UploadZone } from './UploadZone.js';
 import { RouteList } from './RouteList.js';
 import { RouteMap } from './RouteMap.js';
+import type { MapWindControlData } from './RouteMap.js';
 import { StatsRow } from './StatsRow.js';
 import { ElevationChart } from './ElevationChart.js';
 import { PhysicsParamsPanel } from './PhysicsParamsPanel.js';
@@ -17,6 +18,8 @@ import { PacingOptimizerPanel } from './PacingOptimizerPanel.js';
 import { CdaEstimator } from './CdaEstimator.js';
 import { NumberField } from './NumberField.js';
 import { ReportView } from './ReportView.js';
+import { WindZonesPanel } from './WindZonesPanel.js';
+import { WindRibbon } from './WindRibbon.js';
 
 export function RouteSplitterApp() {
   const store = useDataStore();
@@ -36,6 +39,7 @@ export function RouteSplitterApp() {
   const [everyKm, setEveryKm] = useState(0.25);
   const [startTime, setStartTime] = useState('');
   const [reportExporting, setReportExporting] = useState(false);
+  const [selectedWindZoneId, setSelectedWindZoneId] = useState<string | null>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
 
   const processedPoints = useMemo<ProcessedPoint[]>(() => {
@@ -54,15 +58,42 @@ export function RouteSplitterApp() {
     setDefaultPowerWatts,
     resetBreakpoints,
     applyPowerUpdates,
-    replaceBreakpoints
+    replaceBreakpoints,
+    addWindZoneBoundary,
+    removeWindZoneBoundary,
+    updateWindZone,
+    resetWindZones
   } = useSectionPlan(selectedRoute?.id ?? null, selectedRoute?.distanceKm ?? 0);
 
   const defaultPowerWatts = plan?.defaultPowerWatts ?? 250;
 
   const sections = useMemo(() => {
     if (!plan || processedPoints.length < 2) return [];
-    return computeSections(plan.breakpoints, processedPoints, physicsParams, plan.calcMode, defaultPowerWatts);
+    return computeSections(plan.breakpoints, processedPoints, physicsParams, plan.calcMode, defaultPowerWatts, plan.windZones);
   }, [plan, processedPoints, physicsParams, defaultPowerWatts]);
+
+  const sortedWindZones = useMemo(() => [...(plan?.windZones ?? [])].sort((a, b) => a.distKm - b.distKm), [plan?.windZones]);
+
+  const activeWindZoneIndex = useMemo(() => {
+    if (sortedWindZones.length < 2) return -1;
+    const idx = sortedWindZones.findIndex(z => z.id === selectedWindZoneId && z.fixed !== 'start');
+    // Il confine 'start' (indice 0) non porta un proprio vento: se non c'è selezione valida,
+    // seleziona di default l'ultima zona (quella che copre l'arrivo).
+    return idx > 0 ? idx : sortedWindZones.length - 1;
+  }, [sortedWindZones, selectedWindZoneId]);
+
+  const windControl: MapWindControlData | null = useMemo(() => {
+    if (activeWindZoneIndex < 1 || !plan) return null;
+    const zone = sortedWindZones[activeWindZoneIndex]!;
+    const fromKm = sortedWindZones[activeWindZoneIndex - 1]!.distKm;
+    return {
+      rangeLabel: `${fromKm.toFixed(1)} → ${zone.distKm.toFixed(1)} km`,
+      speedKmh: zone.speedKmh ?? 0,
+      directionDeg: zone.directionDeg ?? 0,
+      onChangeSpeed: (speedKmh: number) => void updateWindZone(zone.id, { speedKmh }),
+      onChangeDirection: (directionDeg: number) => void updateWindZone(zone.id, { directionDeg })
+    };
+  }, [activeWindZoneIndex, sortedWindZones, plan, updateWindZone]);
 
   const refreshRoutes = useCallback(async () => {
     const list = await store.routes.listByAthlete(null);
@@ -171,7 +202,8 @@ export function RouteSplitterApp() {
         }
         await replaceBreakpoints(parsed.breakpoints, {
           calcMode: parsed.calcMode ?? undefined,
-          defaultSpeedKmh: parsed.defaultSpeedKmh ?? undefined
+          defaultSpeedKmh: parsed.defaultSpeedKmh ?? undefined,
+          windZones: parsed.windZones ?? undefined
         });
         if (parsed.routeName) {
           const updated = await store.routes.update(selectedRoute.id, { name: parsed.routeName });
@@ -243,6 +275,18 @@ export function RouteSplitterApp() {
 
           <CdaEstimator physicsParams={physicsParams} onApplyCda={cda => setPhysicsParams(p => ({ ...p, cda }))} />
 
+          {plan && selectedRoute && (
+            <WindZonesPanel
+              windZones={plan.windZones}
+              totalDistanceKm={selectedRoute.distanceKm}
+              selectedZoneId={selectedWindZoneId}
+              onSelectZone={setSelectedWindZoneId}
+              onAddBoundary={distKm => void addWindZoneBoundary(distKm)}
+              onRemoveBoundary={id => void removeWindZoneBoundary(id)}
+              onReset={() => void resetWindZones()}
+            />
+          )}
+
           {plan && (
             <PacingOptimizerPanel
               breakpoints={plan.breakpoints}
@@ -263,6 +307,7 @@ export function RouteSplitterApp() {
                 addMode={addMode}
                 onAddBreakpoint={distKm => void addBreakpoint(distKm)}
                 onRemoveBreakpoint={id => void removeBreakpoint(id)}
+                windControl={windControl}
               />
 
               <div className="top-controls-row">
@@ -340,6 +385,9 @@ export function RouteSplitterApp() {
               </div>
 
               <div className="panel">
+                {plan.windZones.length >= 2 && (
+                  <WindRibbon points={processedPoints} windZones={plan.windZones} totalDistanceKm={selectedRoute.distanceKm} />
+                )}
                 <ElevationChart
                   points={processedPoints}
                   smoothingRadiusMeters={smoothingRadiusMeters}

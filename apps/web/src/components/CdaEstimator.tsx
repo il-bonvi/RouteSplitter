@@ -11,11 +11,12 @@ export function CdaEstimator({ physicsParams, onApplyCda }: CdaEstimatorProps) {
   const [speedKmh, setSpeedKmh] = useState(36);
   const [powerW, setPowerW] = useState(250);
   const [gradePct, setGradePct] = useState(0);
+  const [windKmh, setWindKmh] = useState(0);
   const [result, setResult] = useState<number | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const runEstimate = () => {
-    const cda = estimateCda(speedKmh / 3.6, powerW, gradePct, physicsParams);
+    const cda = estimateCda(speedKmh / 3.6, powerW, gradePct, { ...physicsParams, windKmh });
     if (cda == null) {
       setResult(null);
       setErrorMsg('Dati non validi (forza aerodinamica ≤ 0 — controlla pendenza/potenza/velocità).');
@@ -29,7 +30,7 @@ export function CdaEstimator({ physicsParams, onApplyCda }: CdaEstimatorProps) {
     <div className="cda-box">
       <div className="physics-panel-title">Stima CdA da campo</div>
       <p className="physics-hint">
-        Da un singolo campione medio (velocità/potenza/pendenza). Su tratti a pendenza o vento non uniformi il
+        Da un singolo campione medio (velocità/potenza/pendenza/vento). Su tratti a pendenza o vento non uniformi il
         risultato può essere impreciso — vedi <code>stato_rs.md</code> per il dettaglio.
       </p>
       <div className="physics-grid">
@@ -44,6 +45,10 @@ export function CdaEstimator({ physicsParams, onApplyCda }: CdaEstimatorProps) {
         <label className="physics-field">
           <span>Pendenza media (%)</span>
           <NumberField step={0.1} value={gradePct} onCommit={setGradePct} />
+        </label>
+        <label className="physics-field">
+          <span>Vento durante la misura (km/h, +testa)</span>
+          <NumberField step={0.5} value={windKmh} onCommit={setWindKmh} />
         </label>
       </div>
       <div className="pacing-actions">

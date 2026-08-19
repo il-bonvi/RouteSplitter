@@ -1,8 +1,20 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { MapContainer, TileLayer, Polyline, CircleMarker, Marker, Tooltip, useMap, useMapEvents } from 'react-leaflet';
 import L, { type LatLngBoundsExpression, type LatLngTuple } from 'leaflet';
 import type { ProcessedPoint, SectionBreakpoint } from '@physics-core';
 import { buildColorSegments } from '../lib/buildColorSegments.js';
+import { WindCompass } from './WindCompass.js';
+import { NumberField } from './NumberField.js';
+import { cardinalName } from '../lib/windDisplay.js';
+
+export interface MapWindControlData {
+  rangeLabel: string;
+  speedKmh: number;
+  directionDeg: number;
+  onChangeSpeed: (speedKmh: number) => void;
+  onChangeDirection: (directionDeg: number) => void;
+}
 
 interface RouteMapProps {
   points: ProcessedPoint[];
@@ -12,6 +24,7 @@ interface RouteMapProps {
   addMode: boolean;
   onAddBreakpoint: (distKm: number) => void;
   onRemoveBreakpoint: (id: string) => void;
+  windControl: MapWindControlData | null;
 }
 
 function FitToRoute({ bounds }: { bounds: LatLngBoundsExpression }) {
@@ -48,6 +61,46 @@ function RecenterControl({ bounds }: { bounds: LatLngBoundsExpression }) {
     };
   }, [map, bounds]);
   return null;
+}
+
+/**
+ * Bussola vento come overlay direttamente sulla mappa (non in un pannello a parte): così il
+ * coach vede subito come la direzione del vento si relaziona alla direzione reale della strada,
+ * cosa che una bussola isolata in un form non permette di valutare a colpo d'occhio.
+ */
+function WindMapControl({ data }: { data: MapWindControlData }) {
+  const map = useMap();
+  const [container, setContainer] = useState<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const ctrl = new L.Control({ position: 'bottomright' });
+    let div: HTMLDivElement | null = null;
+    ctrl.onAdd = () => {
+      div = L.DomUtil.create('div', 'map-wind-control');
+      L.DomEvent.disableClickPropagation(div);
+      L.DomEvent.disableScrollPropagation(div);
+      setContainer(div);
+      return div;
+    };
+    ctrl.addTo(map);
+    return () => {
+      ctrl.remove();
+      setContainer(null);
+    };
+  }, [map]);
+
+  if (!container) return null;
+  return createPortal(
+    <div className="map-wind-widget">
+      <div className="map-wind-range">💨 {data.rangeLabel}</div>
+      <WindCompass directionDeg={data.directionDeg} onChange={data.onChangeDirection} size={104} />
+      <div className="map-wind-readout">
+        <NumberField step={1} min={0} value={data.speedKmh} onCommit={data.onChangeSpeed} />
+        <span>km/h da {cardinalName(data.directionDeg)}</span>
+      </div>
+    </div>,
+    container
+  );
 }
 
 /** Trova il punto del percorso più vicino a un click sulla mappa, per calcolarne la distanza km. */
@@ -102,7 +155,8 @@ export function RouteMap({
   breakpoints,
   addMode,
   onAddBreakpoint,
-  onRemoveBreakpoint
+  onRemoveBreakpoint,
+  windControl
 }: RouteMapProps) {
   const latLngs = useMemo<LatLngTuple[]>(() => points.map(p => [p.lat, p.lon]), [points]);
   const bounds = useMemo<LatLngBoundsExpression>(() => latLngs, [latLngs]);
@@ -159,6 +213,7 @@ export function RouteMap({
         <ClickToAdd points={points} addMode={addMode} onAddBreakpoint={onAddBreakpoint} />
         <FitToRoute bounds={bounds} />
         <RecenterControl bounds={bounds} />
+        {windControl && <WindMapControl data={windControl} />}
       </MapContainer>
     </div>
   );
