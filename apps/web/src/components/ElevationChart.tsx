@@ -5,13 +5,18 @@ import {
   lttb,
   computeGainLossBetween,
   getInterpolatedPoint,
+  windAtDistKm,
+  routeBearingAtDistKm,
+  effectiveHeadwindKmh,
   type ProcessedPoint,
   type ChartPoint,
   type SectionBreakpoint,
   type SectionResult
 } from '@physics-core';
+import type { WindZoneBoundary } from '@shared-schema';
 import { getGradientColor } from '../lib/gradientColor.js';
 import { formatTime } from '../lib/formatTime.js';
+import { headwindColor, headwindOpacity } from '../lib/windDisplay.js';
 import { SmoothingControl } from './SmoothingControl.js';
 
 interface HoverInfo {
@@ -39,6 +44,7 @@ interface ElevationChartProps {
   addMode: boolean;
   onAddBreakpoint: (distKm: number) => void;
   onRemoveBreakpoint: (id: string) => void;
+  windZones?: WindZoneBoundary[];
 }
 
 interface ChartDatum extends ChartPoint {
@@ -62,7 +68,8 @@ export function ElevationChart({
   sections,
   addMode,
   onAddBreakpoint,
-  onRemoveBreakpoint
+  onRemoveBreakpoint,
+  windZones = []
 }: ElevationChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [zoomDomain, setZoomDomain] = useState<[number, number] | null>(null);
@@ -107,6 +114,25 @@ export function ElevationChart({
       lon: p.lon
     }));
   }, [points, smoothingRadiusMeters]);
+
+  // Massimo assoluto della componente di vento efficace sull'INTERO percorso (non solo la
+  // porzione zoomata): tiene la scala colore/opacità della fascia vento stabile quando si
+  // zooma, altrimenti "rosso pieno" cambierebbe significato ad ogni zoom-in.
+  const windMaxAbs = useMemo(() => {
+    if (windZones.length < 2 || points.length < 2) return 0;
+    const totalKm = points[points.length - 1]!.dist / 1000;
+    if (totalKm <= 0) return 0;
+    let max = 0;
+    const coarseSamples = 150;
+    for (let i = 0; i <= coarseSamples; i++) {
+      const km = (totalKm * i) / coarseSamples;
+      const wind = windAtDistKm(windZones, km);
+      if (!wind) continue;
+      const bearing = routeBearingAtDistKm(points, km);
+      max = Math.max(max, Math.abs(effectiveHeadwindKmh(wind.speedKmh, wind.directionDeg, bearing)));
+    }
+    return Math.max(max, 3);
+  }, [points, windZones]);
 
   // Reset dello zoom quando cambia il percorso (non quando cambia solo lo smoothing:
   // in quel caso ha senso restare sulla stessa porzione che si stava guardando).
@@ -181,6 +207,37 @@ export function ElevationChart({
       .style('stroke', '#e5e7eb')
       .style('stroke-dasharray', '3,3');
     g.selectAll('.domain').style('stroke', '#d1d5db');
+
+    // ── Fascia vento (testa/coda), allineata pixel-per-pixel con xScale: prima viveva in
+    // un componente separato (WindRibbon) sopra il grafico, a piena larghezza del suo
+    // contenitore — quindi FUORI SCALA rispetto ai margini dell'SVG sottostante e cieca
+    // allo zoom (mostrava sempre l'intero percorso anche col grafico zoomato su un tratto).
+    // Disegnandola qui, nello stesso <g> e con la stessa xScale(d0,d1), il colore sotto un
+    // punto del profilo corrisponde SEMPRE esattamente a quel punto, zoom incluso.
+    if (windZones.length >= 2 && windMaxAbs > 0) {
+      const bandH = 7;
+      const bandY = -bandH - 5;
+      const bandSamples = 110;
+      const windG = g.append('g').attr('class', 'wind-band');
+      const stepKm = (d1 - d0) / bandSamples;
+      for (let i = 0; i < bandSamples; i++) {
+        const kmStart = d0 + i * stepKm;
+        const kmMid = kmStart + stepKm / 2;
+        const wind = windAtDistKm(windZones, kmMid);
+        const headwindKmh = wind ? effectiveHeadwindKmh(wind.speedKmh, wind.directionDeg, routeBearingAtDistKm(points, kmMid)) : 0;
+        const x = xScale(kmStart);
+        const wpx = Math.max(1, xScale(kmStart + stepKm) - x);
+        windG
+          .append('rect')
+          .attr('x', x)
+          .attr('y', bandY)
+          .attr('width', wpx + 0.6)
+          .attr('height', bandH)
+          .attr('rx', 1.5)
+          .attr('fill', headwindColor(headwindKmh, windMaxAbs))
+          .attr('opacity', headwindOpacity(headwindKmh, windMaxAbs));
+      }
+    }
 
     // Area + linea colorate per pendenza: un segmento per ogni coppia di punti visualizzati
     // (già ridotti con LTTB quando il percorso è molto lungo — non migliaia di elementi grezzi).
@@ -442,7 +499,7 @@ export function ElevationChart({
     // onHoverPoint/onAddBreakpoint/onRemoveBreakpoint sono letti via ref apposta (vedi sopra):
     // includerli qui farebbe ricostruire l'intero grafico ad ogni hover.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fullData, zoomDomain, breakpoints, sections, addMode, points]);
+  }, [fullData, zoomDomain, breakpoints, sections, addMode, points, windZones, windMaxAbs]);
 
   if (points.length < 2) return null;
 
@@ -479,6 +536,19 @@ export function ElevationChart({
         </div>
       </div>
       <div ref={containerRef} className="elevation-chart" />
+      {windZones.length >= 2 && (
+        <div className="wind-ribbon-legend elevation-wind-legend">
+          <span>
+            <i style={{ background: '#22c55e' }} /> in coda
+          </span>
+          <span>
+            <i style={{ background: '#94a3b8' }} /> traverso
+          </span>
+          <span>
+            <i style={{ background: '#ef4444' }} /> in testa
+          </span>
+        </div>
+      )}
     </>
   );
 }

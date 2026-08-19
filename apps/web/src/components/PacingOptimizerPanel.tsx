@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { optimizePacing, type ProcessedPoint, type SectionBreakpoint, type PhysicsParams } from '@physics-core';
+import type { WindZoneBoundary } from '@shared-schema';
 import { breakpointsToSegments, buildFineGrid, mapFinePowersToBreakpoints, type FineSegment } from '../lib/pacingActions.js';
 import { NumberField } from './NumberField.js';
 import { formatTime } from '../lib/formatTime.js';
@@ -10,6 +11,7 @@ interface PacingOptimizerPanelProps {
   processedPoints: ProcessedPoint[];
   physicsParams: PhysicsParams;
   totalDistanceKm: number;
+  windZones: WindZoneBoundary[];
   onApplyPowers: (updates: Map<string, number>) => void;
 }
 
@@ -18,7 +20,7 @@ interface FineGridResult {
   powers: number[];
 }
 
-export function PacingOptimizerPanel({ breakpoints, processedPoints, physicsParams, totalDistanceKm, onApplyPowers }: PacingOptimizerPanelProps) {
+export function PacingOptimizerPanel({ breakpoints, processedPoints, physicsParams, totalDistanceKm, windZones, onApplyPowers }: PacingOptimizerPanelProps) {
   const [targetAvg, setTargetAvg] = useState(220);
   const [targetNp, setTargetNp] = useState<number | ''>('');
   const [minPower, setMinPower] = useState(100);
@@ -29,11 +31,13 @@ export function PacingOptimizerPanel({ breakpoints, processedPoints, physicsPara
   const [finePlan, setFinePlan] = useState<FineGridResult | null>(null);
   const [chartOpen, setChartOpen] = useState(false);
 
+  const windActive = windZones.length >= 2;
+
   const runOnSections = () => {
     if (breakpoints.length < 2) return;
     setBusy(true);
     try {
-      const segs = breakpointsToSegments(breakpoints, processedPoints);
+      const segs = breakpointsToSegments(breakpoints, processedPoints, windZones);
       const result = optimizePacing(
         segs,
         { targetAvgPower: targetAvg, targetNormalizedPower: targetNp === '' ? null : targetNp, minPower, maxPower },
@@ -44,7 +48,7 @@ export function PacingOptimizerPanel({ breakpoints, processedPoints, physicsPara
       for (let i = 1; i < sorted.length; i++) updates.set(sorted[i]!.id, Math.round(result.powers[i - 1]!));
       onApplyPowers(updates);
       setResultText(
-        `Sezioni · Tempo ${formatTime(result.totalTimeHours)} · Media ${result.timeWeightedAvgPower.toFixed(0)} W · NP ~${result.normalizedPower.toFixed(0)} W`
+        `Sezioni${windActive ? ' (con vento)' : ''} · Tempo ${formatTime(result.totalTimeHours)} · Media ${result.timeWeightedAvgPower.toFixed(0)} W · NP ~${result.normalizedPower.toFixed(0)} W`
       );
     } finally {
       setBusy(false);
@@ -55,9 +59,9 @@ export function PacingOptimizerPanel({ breakpoints, processedPoints, physicsPara
     if (breakpoints.length < 2 || stepMeters < 50) return;
     setBusy(true);
     try {
-      const fineSegs = buildFineGrid(totalDistanceKm, stepMeters / 1000, processedPoints);
+      const fineSegs = buildFineGrid(totalDistanceKm, stepMeters / 1000, processedPoints, windZones);
       const result = optimizePacing(
-        fineSegs.map(s => ({ distanceKm: s.distanceKm, gradient: s.gradient })),
+        fineSegs.map(s => ({ distanceKm: s.distanceKm, gradient: s.gradient, windKmh: s.windKmh })),
         { targetAvgPower: targetAvg, targetNormalizedPower: targetNp === '' ? null : targetNp, minPower, maxPower },
         physicsParams
       );
@@ -65,7 +69,7 @@ export function PacingOptimizerPanel({ breakpoints, processedPoints, physicsPara
       onApplyPowers(updates);
       setFinePlan({ segs: fineSegs, powers: result.powers });
       setResultText(
-        `Completo (${fineSegs.length} × ${stepMeters}m) · Tempo ${formatTime(result.totalTimeHours)} · Media ${result.timeWeightedAvgPower.toFixed(0)} W · NP ~${result.normalizedPower.toFixed(0)} W`
+        `Completo${windActive ? ' (con vento)' : ''} (${fineSegs.length} × ${stepMeters}m) · Tempo ${formatTime(result.totalTimeHours)} · Media ${result.timeWeightedAvgPower.toFixed(0)} W · NP ~${result.normalizedPower.toFixed(0)} W`
       );
     } finally {
       setBusy(false);
@@ -74,7 +78,14 @@ export function PacingOptimizerPanel({ breakpoints, processedPoints, physicsPara
 
   return (
     <div className="pacing-panel">
-      <div className="physics-panel-title">Ottimizzatore di pacing</div>
+      <div className="physics-panel-title">
+        Ottimizzatore di pacing
+        {windActive && (
+          <span className="pacing-wind-badge" title="Tiene conto delle zone vento definite">
+            🌬️ con vento
+          </span>
+        )}
+      </div>
       <div className="physics-grid">
         <label className="physics-field">
           <span>Media target (W)</span>

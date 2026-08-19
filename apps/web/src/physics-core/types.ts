@@ -27,10 +27,18 @@ export interface PowerSegment {
   gradient: number;
   /** Potenza costante assunta sul tratto, in W */
   power: number;
+  /** Componente di vento efficace su questo tratto (km/h, positivo = in testa), se nota. */
+  windKmh?: number;
 }
 
 /** Segmento "grezzo" (senza potenza ancora assegnata) su cui far lavorare l'ottimizzatore. */
 export interface OptimizableSegment {
   distanceKm: number;
   gradient: number;
+  /**
+   * Componente di vento efficace su QUESTO segmento (km/h, positivo = in testa), se nota
+   * (zone vento definite). Se assente, l'ottimizzatore usa il params.windKmh scalare globale
+   * passato a parte — comportamento storico, invariato quando non ci sono zone vento.
+   */
+  windKmh?: number;
 }

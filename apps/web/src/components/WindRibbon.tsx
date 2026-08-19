@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import type { ProcessedPoint } from '@physics-core';
 import { effectiveHeadwindKmh, routeBearingAtDistKm, windAtDistKm } from '@physics-core';
 import type { WindZoneBoundary } from '@shared-schema';
+import { headwindColor } from '../lib/windDisplay.js';
 
 interface WindRibbonProps {
   points: ProcessedPoint[];
@@ -10,24 +11,6 @@ interface WindRibbonProps {
 }
 
 const SAMPLES = 180;
-
-function headwindColor(headwindKmh: number, maxAbs: number): string {
-  const t = maxAbs > 0 ? Math.max(-1, Math.min(1, headwindKmh / maxAbs)) : 0;
-  // t>0 = testa (rosso), t<0 = coda (verde), 0 = grigio neutro (traverso o vento nullo)
-  if (t >= 0) {
-    // grigio (#94a3b8) -> rosso (#ef4444)
-    const r = Math.round(148 + (239 - 148) * t);
-    const g = Math.round(163 + (68 - 163) * t);
-    const b = Math.round(184 + (68 - 184) * t);
-    return `rgb(${r},${g},${b})`;
-  }
-  const s = -t;
-  // grigio (#94a3b8) -> verde (#22c55e)
-  const r = Math.round(148 + (34 - 148) * s);
-  const g = Math.round(163 + (197 - 163) * s);
-  const b = Math.round(184 + (94 - 184) * s);
-  return `rgb(${r},${g},${b})`;
-}
 
 export function WindRibbon({ points, windZones, totalDistanceKm }: WindRibbonProps) {
   const samples = useMemo(() => {

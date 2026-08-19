@@ -19,7 +19,6 @@ import { CdaEstimator } from './CdaEstimator.js';
 import { NumberField } from './NumberField.js';
 import { ReportView } from './ReportView.js';
 import { WindZonesPanel } from './WindZonesPanel.js';
-import { WindRibbon } from './WindRibbon.js';
 
 export function RouteSplitterApp() {
   const store = useDataStore();
@@ -293,6 +292,7 @@ export function RouteSplitterApp() {
               processedPoints={processedPoints}
               physicsParams={physicsParams}
               totalDistanceKm={selectedRoute.distanceKm}
+              windZones={plan.windZones}
               onApplyPowers={updates => void applyPowerUpdates(updates)}
             />
           )}
@@ -308,6 +308,8 @@ export function RouteSplitterApp() {
                 onAddBreakpoint={distKm => void addBreakpoint(distKm)}
                 onRemoveBreakpoint={id => void removeBreakpoint(id)}
                 windControl={windControl}
+                windZones={plan.windZones}
+                totalDistanceKm={selectedRoute.distanceKm}
               />
 
               <div className="top-controls-row">
@@ -385,9 +387,6 @@ export function RouteSplitterApp() {
               </div>
 
               <div className="panel">
-                {plan.windZones.length >= 2 && (
-                  <WindRibbon points={processedPoints} windZones={plan.windZones} totalDistanceKm={selectedRoute.distanceKm} />
-                )}
                 <ElevationChart
                   points={processedPoints}
                   smoothingRadiusMeters={smoothingRadiusMeters}
@@ -398,6 +397,7 @@ export function RouteSplitterApp() {
                   addMode={addMode}
                   onAddBreakpoint={distKm => void addBreakpoint(distKm)}
                   onRemoveBreakpoint={id => void removeBreakpoint(id)}
+                  windZones={plan.windZones}
                 />
               </div>
             </div>

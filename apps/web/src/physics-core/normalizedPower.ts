@@ -6,13 +6,22 @@ export interface PowerSample {
   power: number;
 }
 
+/**
+ * Params effettivi per un segmento: se il segmento porta la propria componente di vento
+ * (zone vento definite, vedi pacingActions), sovrascrive params.windKmh SOLO per questo
+ * segmento — altrimenti usa params così com'è (comportamento storico, vento scalare unico).
+ */
+function paramsForSegment(seg: PowerSegment, params: PhysicsParams): PhysicsParams {
+  return seg.windKmh === undefined ? params : { ...params, windKmh: seg.windKmh };
+}
+
 /** Campiona una lista di segmenti a potenza costante in una serie a risoluzione ~1s. */
 export function buildConstPowerSamples(segments: PowerSegment[], params: PhysicsParams): PowerSample[] {
   const samples: PowerSample[] = [];
   let tSec = 0;
   for (const s of segments) {
     if (!(s.distanceKm > 0)) continue;
-    const v = speedFromPower(s.power, s.gradient, params) * 3.6; // km/h
+    const v = speedFromPower(s.power, s.gradient, paramsForSegment(s, params)) * 3.6; // km/h
     const durSec = v > 0.1 ? (s.distanceKm / v) * 3600 : 0;
     if (durSec <= 0) continue;
     const n = Math.max(1, Math.round(durSec));
@@ -62,7 +71,7 @@ export function timeWeightedAvgPower(segments: PowerSegment[], params: PhysicsPa
   let sumT = 0;
   for (const s of segments) {
     if (!(s.distanceKm > 0)) continue;
-    const v = speedFromPower(s.power, s.gradient, params) * 3.6;
+    const v = speedFromPower(s.power, s.gradient, paramsForSegment(s, params)) * 3.6;
     const t = v > 0.1 ? s.distanceKm / v : 0;
     sumPT += s.power * t;
     sumT += t;

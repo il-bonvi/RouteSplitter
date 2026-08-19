@@ -2,6 +2,11 @@ import { speedFromPower } from './physics.js';
 import { computeNormalizedPower, timeWeightedAvgPower } from './normalizedPower.js';
 import type { OptimizableSegment, PhysicsParams, PowerSegment } from './types.js';
 
+/** Params effettivi per un segmento con vento noto (vedi stesso pattern in normalizedPower.ts). */
+function paramsForSegment(seg: OptimizableSegment, params: PhysicsParams): PhysicsParams {
+  return seg.windKmh === undefined ? params : { ...params, windKmh: seg.windKmh };
+}
+
 /**
  * Proietta `powers` così che la media pesata sul TEMPO sia = targetAvg, rispettando i
  * limiti [minPower, maxPower]. Ad ogni iterazione: calcola la media attuale, e se è
@@ -29,7 +34,7 @@ export function projectToTimeWeightedAverage(
   for (let iter = 0; iter < maxIterations; iter++) {
     const times = result.map((p, i) => {
       const seg = segments[i]!;
-      const v = speedFromPower(p, seg.gradient, params) * 3.6;
+      const v = speedFromPower(p, seg.gradient, paramsForSegment(seg, params)) * 3.6;
       return v > 0.1 ? seg.distanceKm / v : 1e-6;
     });
     const sumT = times.reduce((a, b) => a + b, 0);
@@ -90,6 +95,15 @@ export interface PacingOptimizerResult {
  * NOTA — limiti noti non affrontati qui (vedi roadmap): nessun modello di affaticamento
  * (CP/W'), nessun vincolo di rampa tra segmenti adiacenti, nessuna garanzia formale di
  * convergenza al vero ottimo (euristica, non un solver convesso).
+ *
+ * Vento: se i segmenti in ingresso portano `windKmh` (zone vento definite, vedi
+ * `lib/pacingActions.ts`), l'ottimizzatore alloca la potenza tenendone conto — stesso
+ * principio già visto per pendenza/piano: un tratto in forte testa parte da una velocità
+ * più bassa (regime aerodinamico meno dominante, quasi-lineare), quindi un watt marginale lì
+ * compra proporzionalmente più tempo risparmiato che su un tratto in coda, dove si è già
+ * veloci e si è nel regime aerodinamico quasi-cubico a rendimenti marginali decrescenti.
+ * Risultato: a parità di media, l'ottimizzatore spinge di più contro vento e tira il fiato
+ * in coda — la stessa strategia di pacing raccomandata per il vento in letteratura.
  */
 export function optimizePacing(
   segments: OptimizableSegment[],
@@ -104,9 +118,10 @@ export function optimizePacing(
 
   for (let iter = 0; iter < mainIterations; iter++) {
     const marginal = segments.map((s, i) => {
-      const v0 = speedFromPower(powers[i]!, s.gradient, params) * 3.6;
+      const segParams = paramsForSegment(s, params);
+      const v0 = speedFromPower(powers[i]!, s.gradient, segParams) * 3.6;
       const t0 = v0 > 0.1 ? s.distanceKm / v0 : 999;
-      const v1 = speedFromPower(powers[i]! + 5, s.gradient, params) * 3.6;
+      const v1 = speedFromPower(powers[i]! + 5, s.gradient, segParams) * 3.6;
       const t1 = v1 > 0.1 ? s.distanceKm / v1 : 999;
       return Math.max(0, (t0 - t1) / 5); // secondi risparmiati per watt aggiuntivo
     });
@@ -127,7 +142,8 @@ export function optimizePacing(
       const segList: PowerSegment[] = segments.map((s, i) => ({
         distanceKm: s.distanceKm,
         gradient: s.gradient,
-        power: powers[i]!
+        power: powers[i]!,
+        windKmh: s.windKmh
       }));
       const np = computeNormalizedPower(segList, params);
       if (Math.abs(np - targetNormalizedPower) < 0.8) break;
@@ -142,14 +158,14 @@ export function optimizePacing(
   let sumT = 0;
   for (let i = 0; i < segments.length; i++) {
     const seg = segments[i]!;
-    const v = speedFromPower(powers[i]!, seg.gradient, params) * 3.6;
+    const v = speedFromPower(powers[i]!, seg.gradient, paramsForSegment(seg, params)) * 3.6;
     const t = v > 0.1 ? seg.distanceKm / v : 0;
     sumPT += powers[i]! * t;
     sumT += t;
   }
   const finalTimeWeightedAvg = sumT > 0 ? sumPT / sumT : targetAvgPower;
   const finalNp = computeNormalizedPower(
-    segments.map((s, i) => ({ distanceKm: s.distanceKm, gradient: s.gradient, power: powers[i]! })),
+    segments.map((s, i) => ({ distanceKm: s.distanceKm, gradient: s.gradient, power: powers[i]!, windKmh: s.windKmh })),
     params
   );
 

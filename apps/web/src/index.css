@@ -294,6 +294,19 @@ body {
   letter-spacing: 1px;
   margin-bottom: 8px;
 }
+.pacing-wind-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  background: rgba(0, 229, 255, 0.12);
+  color: var(--accent);
+  font-size: 0.62rem;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: normal;
+  vertical-align: middle;
+}
 .physics-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
@@ -1158,20 +1171,8 @@ body {
   color: var(--text-muted);
 }
 
-/* Fascia vento sopra il grafico altimetria */
-.wind-ribbon {
-  margin: 8px 0 4px;
-}
-.wind-ribbon-bar {
-  display: flex;
-  width: 100%;
-  height: 14px;
-  border-radius: 4px;
-  overflow: hidden;
-}
-.wind-ribbon-cell {
-  flex: 1 1 0;
-}
+/* Legenda vento sotto il grafico altimetria (la fascia colorata vive ora dentro l'SVG
+   di ElevationChart, allineata a xScale — vedi ElevationChart.tsx). */
 .wind-ribbon-legend {
   display: flex;
   gap: 14px;
@@ -1189,4 +1190,17 @@ body {
   width: 10px;
   height: 10px;
   border-radius: 2px;
+}
+.elevation-wind-legend {
+  margin-top: 2px;
+  padding-bottom: 4px;
+}
+
+/* Frecce vento statiche sulla planimetria (WindArrowsLayer) */
+.wind-arrow-icon {
+  pointer-events: none;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.25));
+}
+.wind-arrow-icon svg {
+  display: block;
 }

@@ -34,7 +34,13 @@ function buildPowerTimeSeries(segs: FineSegment[], powers: number[], params: Phy
   for (let i = 0; i < segs.length; i++) {
     const seg = segs[i]!;
     const power = powers[i]!;
-    const v = speedFromPower(power, seg.gradient, params) * 3.6;
+    // Se il segmento porta la propria componente di vento (zone vento definite), usarla al
+    // posto del params.windKmh scalare — stesso pattern di paramsForSegment in
+    // pacingOptimizer.ts/normalizedPower.ts: il grafico previsto deve riflettere lo stesso
+    // vento con cui l'ottimizzatore ha calcolato questi watt, altrimenti tempo/velocità
+    // mostrati qui non corrisponderebbero al piano appena generato.
+    const segParams = seg.windKmh === undefined ? params : { ...params, windKmh: seg.windKmh };
+    const v = speedFromPower(power, seg.gradient, segParams) * 3.6;
     const durSec = v > 0.1 ? (seg.distanceKm / v) * 3600 : 0;
     const n = Math.max(1, Math.round(durSec));
     const dt = durSec / n;

@@ -3,10 +3,12 @@ import { createPortal } from 'react-dom';
 import { MapContainer, TileLayer, Polyline, CircleMarker, Marker, Tooltip, useMap, useMapEvents } from 'react-leaflet';
 import L, { type LatLngBoundsExpression, type LatLngTuple } from 'leaflet';
 import type { ProcessedPoint, SectionBreakpoint } from '@physics-core';
+import type { WindZoneBoundary } from '@shared-schema';
 import { buildColorSegments } from '../lib/buildColorSegments.js';
 import { WindCompass } from './WindCompass.js';
 import { NumberField } from './NumberField.js';
 import { cardinalName } from '../lib/windDisplay.js';
+import { WindArrowsLayer } from './WindArrowsLayer.js';
 
 export interface MapWindControlData {
   rangeLabel: string;
@@ -25,6 +27,8 @@ interface RouteMapProps {
   onAddBreakpoint: (distKm: number) => void;
   onRemoveBreakpoint: (id: string) => void;
   windControl: MapWindControlData | null;
+  windZones: WindZoneBoundary[];
+  totalDistanceKm: number;
 }
 
 function FitToRoute({ bounds }: { bounds: LatLngBoundsExpression }) {
@@ -156,7 +160,9 @@ export function RouteMap({
   addMode,
   onAddBreakpoint,
   onRemoveBreakpoint,
-  windControl
+  windControl,
+  windZones,
+  totalDistanceKm
 }: RouteMapProps) {
   const latLngs = useMemo<LatLngTuple[]>(() => points.map(p => [p.lat, p.lon]), [points]);
   const bounds = useMemo<LatLngBoundsExpression>(() => latLngs, [latLngs]);
@@ -213,6 +219,7 @@ export function RouteMap({
         <ClickToAdd points={points} addMode={addMode} onAddBreakpoint={onAddBreakpoint} />
         <FitToRoute bounds={bounds} />
         <RecenterControl bounds={bounds} />
+        {windZones.length >= 2 && <WindArrowsLayer points={points} windZones={windZones} totalDistanceKm={totalDistanceKm} />}
         {windControl && <WindMapControl data={windControl} />}
       </MapContainer>
     </div>

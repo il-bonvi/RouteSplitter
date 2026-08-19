@@ -66,4 +66,36 @@ describe('optimizePacing', () => {
     expect(result.timeWeightedAvgPower).toBeCloseTo(200, 0);
     expect(result.powers).toHaveLength(200);
   });
+
+  it('con vento per-segmento, a parità di pendenza assegna più potenza al tratto in forte testa che a quello in coda', () => {
+    // Due tratti in piano IDENTICI per pendenza: senza vento (o con params.windKmh globale)
+    // l'ottimizzatore li tratterebbe uguali. Con windKmh per-segmento, il tratto in testa
+    // parte da una velocità molto più bassa (l'aerodinamica pesa meno a bassa velocità,
+    // regime quasi-lineare), quindi un watt marginale lì compra proporzionalmente PIÙ tempo
+    // risparmiato che sul tratto in coda, dove si è già veloci e si è nel regime aerodinamico
+    // quasi-cubico (rendimenti marginali fortemente decrescenti). Stesso principio già
+    // verificato per salita-vs-piano qui sopra — qui è lo stesso identico effetto guidato
+    // dal vento invece che dalla pendenza: spingere di più contro vento, tirare il fiato in
+    // coda, a parità di media, è la strategia di pacing corretta.
+    const segments: OptimizableSegment[] = [
+      { distanceKm: 5, gradient: 0, windKmh: 25 }, // forte vento in testa
+      { distanceKm: 5, gradient: 0, windKmh: -25 } // stesso vento, ma in coda
+    ];
+    const result = optimizePacing(segments, { targetAvgPower: 220, minPower: 100, maxPower: 400 }, params);
+    const [headwindPower, tailwindPower] = result.powers;
+    expect(headwindPower!).toBeGreaterThan(tailwindPower!);
+  });
+
+  it('senza windKmh sul segmento, usa params.windKmh globale (comportamento storico invariato)', () => {
+    const headwindParams: PhysicsParams = { ...params, windKmh: 20 };
+    const segments: OptimizableSegment[] = [
+      { distanceKm: 4, gradient: 0 },
+      { distanceKm: 4, gradient: 0 }
+    ];
+    const result = optimizePacing(segments, { targetAvgPower: 220, minPower: 100, maxPower: 400 }, headwindParams);
+    // Stessa pendenza, stesso vento globale su entrambi -> nessun motivo di differenziarli.
+    const spread = Math.max(...result.powers) - Math.min(...result.powers);
+    expect(spread).toBeLessThan(5);
+    expect(result.timeWeightedAvgPower).toBeCloseTo(220, 0);
+  });
 });
