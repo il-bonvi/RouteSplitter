@@ -3,6 +3,34 @@ import type { WindZoneBoundary } from '@shared-schema';
 import { NumberField } from './NumberField.js';
 import { cardinalName } from '../lib/windDisplay.js';
 
+const KMH_PER_KNOT = 1.852;
+
+/**
+ * Piccolo convertitore km/h ↔ nodi, bidirezionale — utile perché i bollettini meteo marini/
+ * di alcuni servizi vento (compresi molti report per il ciclismo costiero) usano i nodi,
+ * mentre il resto dell'app lavora in km/h. Stato locale indipendente dalle zone vento: è solo
+ * un calcolatore, non scrive né legge alcun dato del piano.
+ */
+function WindSpeedConverter() {
+  const [kmh, setKmh] = useState(20);
+  const [kts, setKts] = useState(round1(20 / KMH_PER_KNOT));
+
+  return (
+    <div className="wind-converter">
+      <span className="wind-converter-label">Convertitore</span>
+      <NumberField min={0} step={0.5} value={kmh} onCommit={v => { setKmh(v); setKts(round1(v / KMH_PER_KNOT)); }} className="wind-converter-input" />
+      <span className="wind-converter-unit">km/h</span>
+      <span className="wind-converter-eq">=</span>
+      <NumberField min={0} step={0.5} value={kts} onCommit={v => { setKts(v); setKmh(round1(v * KMH_PER_KNOT)); }} className="wind-converter-input" />
+      <span className="wind-converter-unit">kts</span>
+    </div>
+  );
+}
+
+function round1(n: number): number {
+  return Math.round(n * 10) / 10;
+}
+
 interface WindZonesPanelProps {
   windZones: WindZoneBoundary[];
   totalDistanceKm: number;
@@ -30,6 +58,7 @@ export function WindZonesPanel({ windZones, totalDistanceKm, selectedZoneId, onS
   return (
     <div className="wind-panel">
       <div className="physics-panel-title">💨 Vento</div>
+      <WindSpeedConverter />
       {sorted.length === 0 ? (
         <p className="wind-panel-hint">
           Nessun vento configurato (equivale a 0 su tutto il percorso).{' '}

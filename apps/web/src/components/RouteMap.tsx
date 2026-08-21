@@ -8,7 +8,7 @@ import { buildColorSegments } from '../lib/buildColorSegments.js';
 import { WindCompass } from './WindCompass.js';
 import { NumberField } from './NumberField.js';
 import { cardinalName } from '../lib/windDisplay.js';
-import { WindArrowsLayer } from './WindArrowsLayer.js';
+import { WindFlowLayer } from './WindFlowLayer.js';
 
 export interface MapWindControlData {
   rangeLabel: string;
@@ -186,8 +186,8 @@ export function RouteMap({
           const icon = L.divIcon({
             className: '',
             html: `<div class="map-num-icon" style="background:${markerColor(bp.fixed)}">${i + 1}</div>`,
-            iconSize: [22, 22],
-            iconAnchor: [11, 11]
+            iconSize: [12, 12],
+            iconAnchor: [6, 6]
           });
           return (
             <Marker
@@ -219,7 +219,7 @@ export function RouteMap({
         <ClickToAdd points={points} addMode={addMode} onAddBreakpoint={onAddBreakpoint} />
         <FitToRoute bounds={bounds} />
         <RecenterControl bounds={bounds} />
-        {windZones.length >= 2 && <WindArrowsLayer points={points} windZones={windZones} totalDistanceKm={totalDistanceKm} />}
+        {windZones.length >= 2 && <WindFlowLayer points={points} windZones={windZones} totalDistanceKm={totalDistanceKm} />}
         {windControl && <WindMapControl data={windControl} />}
       </MapContainer>
     </div>

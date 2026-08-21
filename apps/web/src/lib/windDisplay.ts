@@ -11,7 +11,7 @@ export function cardinalName(directionDeg: number): string {
  * Colore rosso(testa)/verde(coda)/grigio(traverso) per una componente di vento efficace,
  * normalizzata su maxAbs (tipicamente il massimo assoluto lungo l'intero percorso, così il
  * colore resta comparabile fra la fascia in altimetria, le frecce sulla mappa e i badge
- * tabella). Condiviso fra `ElevationChart`, `WindArrowsLayer` e `SectionsTable`.
+ * tabella). Condiviso fra `ElevationChart`, `WindFlowLayer` e `SectionsTable`.
  */
 export function headwindColor(headwindKmh: number, maxAbs: number): string {
   const t = maxAbs > 0 ? Math.max(-1, Math.min(1, headwindKmh / maxAbs)) : 0;

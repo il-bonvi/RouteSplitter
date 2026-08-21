@@ -828,17 +828,18 @@ body {
 }
 
 .map-num-icon {
-  width: 22px;
-  height: 22px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
   font-weight: 800;
-  font-size: 11px;
+  font-size: 7px;
+  line-height: 1;
   color: #fff;
-  border: 2px solid #fff;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+  border: 1px solid #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
   font-family: 'Inter', sans-serif;
 }
 
@@ -1005,6 +1006,37 @@ body {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+.wind-converter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px dashed var(--border);
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  flex-wrap: wrap;
+}
+.wind-converter-label {
+  font-weight: 600;
+  margin-right: 2px;
+}
+.wind-converter-input {
+  width: 64px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.78rem;
+}
+.wind-converter-unit {
+  color: var(--text-muted);
+}
+.wind-converter-eq {
+  opacity: 0.6;
+  margin: 0 2px;
 }
 .wind-zones-chips {
   display: flex;
@@ -1196,11 +1228,16 @@ body {
   padding-bottom: 4px;
 }
 
-/* Frecce vento statiche sulla planimetria (WindArrowsLayer) */
-.wind-arrow-icon {
+/* Canvas particelle vento animate sulla planimetria (WindFlowLayer) */
+.wind-flow-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
   pointer-events: none;
-  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.25));
-}
-.wind-arrow-icon svg {
-  display: block;
+  /* Il pannello principale di Leaflet (mapPane, contiene tile+percorso+marker) porta la
+     classe generica .leaflet-pane con z-index:400 — anche il pannello ESTERNO, non solo i
+     sotto-pannelli interni (tilePane 200, overlayPane 400, markerPane 600...). Un valore
+     sotto i 600 lasciava il canvas dietro l'intero contenuto della mappa. 690: sopra tutti i
+     pannelli standard (fino a popupPane 700 escluso), sotto i controlli Leaflet (1000). */
+  z-index: 690;
 }
