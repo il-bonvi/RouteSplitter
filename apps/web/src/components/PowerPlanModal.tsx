@@ -260,15 +260,22 @@ export function PowerPlanModal({ open, onClose, segs, powers, physicsParams, pro
         fRollA.attr('cy', yPow(rollA[best]!));
         fRollB.attr('cy', yPow(rollB[best]!));
         fPow.attr('cy', yPow(s.power));
-        tip
-          .style('left', `${margin.left + x(s.distKm) + 12}px`)
-          .style('top', '20px')
-          .html(
-            `<strong>${s.distKm.toFixed(2)} km</strong> · ${Math.round(s.ele)} m · t=${formatTime(s.tSec / 3600)}<br>` +
-              `Potenza: <strong>${Math.round(s.power)} W</strong><br>` +
-              `Media ${winA}s: <strong>${Math.round(rollA[best]!)} W</strong><br>` +
-              `Media ${winB}s: <strong>${Math.round(rollB[best]!)} W</strong>`
-          );
+        tip.html(
+          `<strong>${s.distKm.toFixed(2)} km</strong> · ${Math.round(s.ele)} m · t=${formatTime(s.tSec / 3600)}<br>` +
+            `Potenza: <strong>${Math.round(s.power)} W</strong><br>` +
+            `Media ${winA}s: <strong>${Math.round(rollA[best]!)} W</strong><br>` +
+            `Media ${winB}s: <strong>${Math.round(rollB[best]!)} W</strong>`
+        );
+        // Il tooltip di default sta a destra del punto sotto il cursore. Vicino al bordo destro
+        // del grafico questo lo faceva uscire dal contenitore, che lo "schiacciava" (larghezza
+        // ridotta/testo compresso) invece di lasciarlo leggibile: se non c'è più spazio a destra
+        // per la sua larghezza reale, lo si fa passare per intero a sinistra del punto.
+        const tipWidth = (tip.node() as HTMLDivElement).offsetWidth;
+        const pointX = margin.left + x(s.distKm);
+        const hostWidth = host.clientWidth || W;
+        const overflowsRight = pointX + 12 + tipWidth > hostWidth - 4;
+        const left = overflowsRight ? Math.max(4, pointX - 12 - tipWidth) : pointX + 12;
+        tip.style('left', `${left}px`).style('top', '20px');
       });
 
     const meanA = rollA.reduce((a, b) => a + b, 0) / rollA.length;

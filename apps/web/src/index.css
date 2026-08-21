@@ -1007,20 +1007,28 @@ body {
   align-items: center;
   gap: 10px;
 }
+/* Titolo "Vento" + convertitore km/h↔kts sulla stessa riga, per risparmiare spazio verticale:
+   il bordo tratteggiato che prima chiudeva solo il convertitore ora chiude l'intera riga. */
+.wind-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px dashed var(--border);
+}
+.wind-panel-title-inline {
+  margin-bottom: 0;
+}
 .wind-converter {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-bottom: 10px;
-  padding-bottom: 10px;
-  border-bottom: 1px dashed var(--border);
   font-size: 0.78rem;
   color: var(--text-muted);
   flex-wrap: wrap;
-}
-.wind-converter-label {
-  font-weight: 600;
-  margin-right: 2px;
 }
 .wind-converter-input {
   width: 64px;

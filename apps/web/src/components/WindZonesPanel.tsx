@@ -12,12 +12,11 @@ const KMH_PER_KNOT = 1.852;
  * un calcolatore, non scrive né legge alcun dato del piano.
  */
 function WindSpeedConverter() {
-  const [kmh, setKmh] = useState(20);
-  const [kts, setKts] = useState(round1(20 / KMH_PER_KNOT));
+  const [kts, setKts] = useState(10);
+  const [kmh, setKmh] = useState(round1(10 * KMH_PER_KNOT));
 
   return (
     <div className="wind-converter">
-      <span className="wind-converter-label">Convertitore</span>
       <NumberField min={0} step={0.5} value={kmh} onCommit={v => { setKmh(v); setKts(round1(v / KMH_PER_KNOT)); }} className="wind-converter-input" />
       <span className="wind-converter-unit">km/h</span>
       <span className="wind-converter-eq">=</span>
@@ -57,8 +56,10 @@ export function WindZonesPanel({ windZones, totalDistanceKm, selectedZoneId, onS
 
   return (
     <div className="wind-panel">
-      <div className="physics-panel-title">💨 Vento</div>
-      <WindSpeedConverter />
+      <div className="wind-panel-header">
+        <div className="physics-panel-title wind-panel-title-inline">💨 Vento</div>
+        <WindSpeedConverter />
+      </div>
       {sorted.length === 0 ? (
         <p className="wind-panel-hint">
           Nessun vento configurato (equivale a 0 su tutto il percorso).{' '}

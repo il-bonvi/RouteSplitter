@@ -32,6 +32,13 @@ export function NumberField({ value, onCommit, step, min, max, className, placeh
   return (
     <input
       type="number"
+      // Forza il separatore decimale a "." indipendentemente dalla lingua del sistema: alcuni
+      // browser (es. Chrome) mostrano il valore di un input number nel formato numerico della
+      // lingua attiva (in italiano userebbero la virgola) pur restando "." nel valore JS
+      // sottostante — risultato: due campi con lo stesso valore mostrati in modo diverso
+      // (18.5 vs 18,5) a seconda di quale sia stato toccato per ultimo. Qui i dati dell'app
+      // sono sempre in formato "." (JS/JSON), quindi anche la visualizzazione resta coerente.
+      lang="en-US"
       className={className}
       step={step}
       min={min}
