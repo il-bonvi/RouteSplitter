@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { wheelPowerAtSpeed, speedFromPower, powerFromSpeed, estimateCda, GRAVITY } from '../../src/physics-core/physics.js';
+import { wheelPowerAtSpeed, speedFromPower, powerFromSpeed, estimateCda, effectiveCda, GRAVITY } from '../../src/physics-core/physics.js';
 import type { PhysicsParams } from '../../src/physics-core/types.js';
 
 const baseParams: PhysicsParams = {
@@ -88,5 +88,81 @@ describe('estimateCda — inversione coerente con wheelPowerAtSpeed', () => {
     // potenza bassissima su una salita ripida: non è fisicamente coerente stimare CdA da qui
     const estimated = estimateCda(8, 15, 15, baseParams);
     expect(estimated).toBeNull();
+  });
+});
+
+describe('effectiveCda — CdA a soglie multiple, opzionali (0, 1 o N)', () => {
+  it('senza cdaTiers configurato (0 soglie), restituisce sempre params.cda a qualunque pendenza (comportamento storico)', () => {
+    expect(effectiveCda(baseParams, 0)).toBe(baseParams.cda);
+    expect(effectiveCda(baseParams, 12)).toBe(baseParams.cda);
+    expect(effectiveCda(baseParams, -8)).toBe(baseParams.cda);
+  });
+
+  it('con cdaTiers vuoto ([]), si comporta come assente', () => {
+    const params: PhysicsParams = { ...baseParams, cdaTiers: [] };
+    expect(effectiveCda(params, 10)).toBe(baseParams.cda);
+  });
+
+  it('con UNA soglia (caso "duale"): sotto soglia usa il CdA base, alla soglia e sopra usa quello della soglia', () => {
+    const params: PhysicsParams = { ...baseParams, cda: 0.28, cdaTiers: [{ thresholdPct: 5, cda: 0.35 }] };
+    expect(effectiveCda(params, 4.9)).toBe(0.28);
+    expect(effectiveCda(params, 5)).toBe(0.35); // soglia inclusiva
+    expect(effectiveCda(params, 9)).toBe(0.35);
+  });
+
+  it('con PIÙ soglie, sceglie sempre quella con la pendenza-limite più alta raggiunta', () => {
+    const params: PhysicsParams = {
+      ...baseParams,
+      cda: 0.28,
+      cdaTiers: [
+        { thresholdPct: 3, cda: 0.31 },
+        { thresholdPct: 8, cda: 0.38 },
+        { thresholdPct: 12, cda: 0.46 }
+      ]
+    };
+    expect(effectiveCda(params, 1)).toBe(0.28); // sotto la più bassa: CdA base
+    expect(effectiveCda(params, 3)).toBe(0.31);
+    expect(effectiveCda(params, 7.9)).toBe(0.31);
+    expect(effectiveCda(params, 8)).toBe(0.38);
+    expect(effectiveCda(params, 11.9)).toBe(0.38);
+    expect(effectiveCda(params, 12)).toBe(0.46);
+    expect(effectiveCda(params, 20)).toBe(0.46); // sopra tutte: resta l'ultima raggiunta
+  });
+
+  it('non richiede che le soglie siano inserite in ordine: il risultato è identico comunque siano ordinate in cdaTiers', () => {
+    const ordered: PhysicsParams = {
+      ...baseParams,
+      cdaTiers: [
+        { thresholdPct: 3, cda: 0.31 },
+        { thresholdPct: 8, cda: 0.38 }
+      ]
+    };
+    const shuffled: PhysicsParams = {
+      ...baseParams,
+      cdaTiers: [
+        { thresholdPct: 8, cda: 0.38 },
+        { thresholdPct: 3, cda: 0.31 }
+      ]
+    };
+    for (const grade of [0, 3, 5, 8, 15]) {
+      expect(effectiveCda(shuffled, grade)).toBe(effectiveCda(ordered, grade));
+    }
+  });
+
+  it('wheelPowerAtSpeed usa il CdA di soglia sopra soglia: a parità di velocità, più CdA ⇒ più potenza richiesta lì, invariata sotto soglia', () => {
+    const flat: PhysicsParams = { ...baseParams, cda: 0.28 };
+    const tiered: PhysicsParams = { ...baseParams, cda: 0.28, cdaTiers: [{ thresholdPct: 5, cda: 0.4 }] };
+    // Sotto soglia: nessuna differenza, la soglia non deve avere alcun effetto.
+    expect(wheelPowerAtSpeed(10, 2, tiered)).toBeCloseTo(wheelPowerAtSpeed(10, 2, flat), 6);
+    // Sopra soglia: il CdA più alto deve tradursi in più potenza richiesta a parità di velocità.
+    expect(wheelPowerAtSpeed(10, 8, tiered)).toBeGreaterThan(wheelPowerAtSpeed(10, 8, flat));
+  });
+
+  it('speedFromPower converge a una velocità più bassa in salita quando il CdA di soglia è più alto, a parità di watt', () => {
+    const tiered: PhysicsParams = { ...baseParams, cda: 0.28, cdaTiers: [{ thresholdPct: 5, cda: 0.4 }] };
+    const flatOnly: PhysicsParams = { ...baseParams, cda: 0.28 };
+    const vTiered = speedFromPower(220, 7, tiered);
+    const vFlatOnly = speedFromPower(220, 7, flatOnly);
+    expect(vTiered).toBeLessThan(vFlatOnly);
   });
 });

@@ -15,6 +15,20 @@ export const PhysicsParamsSchema = z.object({
   bikeMassKg: z.number().min(3).max(30),
   /** Coefficiente aerodinamico CdA, m². Posizione aero estrema ~0.19, MTB eretto ~0.5+. */
   cda: z.number().min(0.15).max(0.6),
+  /**
+   * Soglie di pendenza opzionali per un CdA che cambia con la pendenza (posizione via via
+   * più eretta man mano che la salita si fa ripida). Vedi commento in physics-core/types.ts.
+   * Tetto a 8 voci: oltre non ha senso pratico su un percorso ciclistico e complica solo la UI.
+   */
+  cdaTiers: z
+    .array(
+      z.object({
+        thresholdPct: z.number().min(0).max(20),
+        cda: z.number().min(0.15).max(0.6)
+      })
+    )
+    .max(8)
+    .optional(),
   /** Coefficiente di rotolamento Crr. Asfalto liscio ~0.002-0.003, gravel/MTB fino a ~0.02. */
   crr: z.number().min(0.001).max(0.03),
   /** Densità dell'aria, kg/m³. Da livello del mare (~1.29) a quote elevate (~0.9 oltre 3000m). */

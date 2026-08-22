@@ -3,6 +3,34 @@ import type { PhysicsParams } from './types.js';
 export const GRAVITY = 9.80665; // m/s^2
 
 /**
+ * CdA effettivo da usare a una data pendenza. Con `cdaTiers` assente/vuoto (caso più comune,
+ * invariato rispetto a prima) restituisce sempre `params.cda` — nessun cambiamento di
+ * comportamento per chi non configura nulla. Con una o più soglie, sceglie quella con la
+ * pendenza-limite più alta fra quelle raggiunte dalla pendenza corrente (non serve che le
+ * soglie siano ordinate in `cdaTiers`: si confrontano tutte).
+ *
+ * Centralizzata qui (non nei singoli chiamanti) perché `gradientPct` è già un parametro
+ * esplicito di OGNI funzione fisica (wheelPowerAtSpeed, speedFromPower, powerFromSpeed) —
+ * quindi la scelta del CdA propaga automaticamente a sezioni, ottimizzatore e grafico
+ * potenza, ovunque venga passata la pendenza locale del tratto, senza toccare quei
+ * chiamanti (stesso principio già usato per il vento per-segmento, ma qui non serve
+ * nemmeno un campo di override: la pendenza è già un dato locale per costruzione).
+ */
+export function effectiveCda(params: PhysicsParams, gradientPct: number): number {
+  const tiers = params.cdaTiers;
+  if (!tiers || tiers.length === 0) return params.cda;
+  let best = params.cda;
+  let bestThreshold = -Infinity;
+  for (const tier of tiers) {
+    if (gradientPct >= tier.thresholdPct && tier.thresholdPct > bestThreshold) {
+      bestThreshold = tier.thresholdPct;
+      best = tier.cda;
+    }
+  }
+  return best;
+}
+
+/**
  * Potenza alla ruota (W) necessaria per mantenere speedMS su una pendenza gradientPct,
  * dati i parametri fisici (gravità + rotolamento + aerodinamica).
  *
@@ -17,7 +45,7 @@ export function wheelPowerAtSpeed(speedMS: number, gradientPct: number, params: 
   const slopeRad = Math.atan(gradientPct / 100);
   const windMS = params.windKmh / 3.6;
   const rel = speedMS + windMS;
-  const aero = 0.5 * params.airDensity * params.cda * rel * Math.abs(rel);
+  const aero = 0.5 * params.airDensity * effectiveCda(params, gradientPct) * rel * Math.abs(rel);
   const roll = params.crr * m * GRAVITY * Math.cos(slopeRad);
   const grav = m * GRAVITY * Math.sin(slopeRad);
   return (aero + roll + grav) * speedMS;
@@ -59,6 +87,10 @@ export function powerFromSpeed(speedMS: number, gradientPct: number, params: Phy
 
 /**
  * Stima CdA per inversione algebrica da UN SINGOLO campione medio (velocità, potenza, pendenza).
+ * Non sa se il campione rappresenta la posizione "in piano" o "in salita" — è compito di chi
+ * chiama decidere a quale campo applicare il risultato (`cda` o `cdaClimbing`), tipicamente
+ * in base alla pendenza del campione stesso rispetto alla soglia configurata (vedi
+ * `CdaEstimator.tsx`).
  *
  * ATTENZIONE — limite noto non ancora risolto: su tratti a pendenza/vento non uniformi,
  * usare valori medi invece di una regressione multi-punto introduce un bias sistematico

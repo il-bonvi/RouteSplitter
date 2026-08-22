@@ -1,4 +1,4 @@
-import { speedFromPower, powerFromSpeed } from './physics.js';
+import { speedFromPower, powerFromSpeed, effectiveCda } from './physics.js';
 import { computeGainLossBetween, getInterpolatedPoint, type ProcessedPoint } from './geo.js';
 import { windAtDistKm, routeBearingAtDistKm, effectiveHeadwindKmh, type WindZoneBoundary } from './wind.js';
 import type { PhysicsParams } from './types.js';
@@ -44,6 +44,13 @@ export interface SectionResult {
    * Positivo = in testa, negativo = in coda. 0 se non sono definite zone vento.
    */
   windHeadwindKmh: number;
+  /**
+   * CdA effettivamente usato per questa sezione (m²) — coincide sempre con `params.cda` a
+   * meno che non sia configurato un CdA "in salita" (vedi `PhysicsParams.cdaClimbing`) e la
+   * pendenza della sezione superi la soglia impostata. Esposto per trasparenza (principio
+   * di design del progetto: ogni risultato riconducibile a parametri espliciti).
+   */
+  cdaUsed: number;
 }
 
 /**
@@ -138,7 +145,8 @@ export function computeSections(
       cumLoss,
       cumAvgSpeedKmh,
       cumAvgPowerWatts,
-      windHeadwindKmh
+      windHeadwindKmh,
+      cdaUsed: effectiveCda(effectiveParams, gradient)
     });
   }
   return results;

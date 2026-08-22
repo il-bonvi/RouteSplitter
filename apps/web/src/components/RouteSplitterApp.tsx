@@ -272,7 +272,16 @@ export function RouteSplitterApp() {
             onCalcModeChange={mode => void setCalcMode(mode)}
           />
 
-          <CdaEstimator physicsParams={physicsParams} onApplyCda={cda => setPhysicsParams(p => ({ ...p, cda }))} />
+          <CdaEstimator
+            physicsParams={physicsParams}
+            onApplyCda={(cda, target) =>
+              setPhysicsParams(p => {
+                if (target === 'base') return { ...p, cda };
+                const tiers = (p.cdaTiers ?? []).map((t, i) => (i === target ? { ...t, cda } : t));
+                return { ...p, cdaTiers: tiers };
+              })
+            }
+          />
 
           {plan && selectedRoute && (
             <WindZonesPanel
@@ -406,6 +415,7 @@ export function RouteSplitterApp() {
           <SectionsTable
             sections={sections}
             calcMode={plan?.calcMode ?? 'speed'}
+            showCda={(physicsParams.cdaTiers?.length ?? 0) > 0}
             onUpdateLabel={(id, label) => void updateBreakpoint(id, { sectionLabel: label })}
             onUpdateSpeed={(id, speedKmh) => void updateBreakpoint(id, { speedKmh })}
             onUpdatePower={(id, powerWatts) => void updateBreakpoint(id, { powerWatts })}

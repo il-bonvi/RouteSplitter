@@ -25,6 +25,31 @@ describe('PhysicsParamsSchema', () => {
     expect(() => PhysicsParamsSchema.parse({ ...DEFAULT_PHYSICS_PARAMS, windKmh: -40 })).not.toThrow();
     expect(() => PhysicsParamsSchema.parse({ ...DEFAULT_PHYSICS_PARAMS, windKmh: 40 })).not.toThrow();
   });
+
+  it('accetta cdaTiers assente, vuoto, o con più soglie valide (opzionale, nessun numero fisso)', () => {
+    expect(() => PhysicsParamsSchema.parse(DEFAULT_PHYSICS_PARAMS)).not.toThrow(); // assente
+    expect(() => PhysicsParamsSchema.parse({ ...DEFAULT_PHYSICS_PARAMS, cdaTiers: [] })).not.toThrow();
+    expect(() =>
+      PhysicsParamsSchema.parse({
+        ...DEFAULT_PHYSICS_PARAMS,
+        cdaTiers: [
+          { thresholdPct: 5, cda: 0.35 },
+          { thresholdPct: 10, cda: 0.42 }
+        ]
+      })
+    ).not.toThrow();
+  });
+
+  it('rifiuta una soglia CdA fuori range plausibile', () => {
+    expect(() =>
+      PhysicsParamsSchema.parse({ ...DEFAULT_PHYSICS_PARAMS, cdaTiers: [{ thresholdPct: 5, cda: 2.8 }] })
+    ).toThrow();
+  });
+
+  it('rifiuta più di 8 soglie CdA (tetto pratico)', () => {
+    const tiers = Array.from({ length: 9 }, (_, i) => ({ thresholdPct: i, cda: 0.3 }));
+    expect(() => PhysicsParamsSchema.parse({ ...DEFAULT_PHYSICS_PARAMS, cdaTiers: tiers })).toThrow();
+  });
 });
 
 describe('PhysicsParamsOverrideSchema', () => {

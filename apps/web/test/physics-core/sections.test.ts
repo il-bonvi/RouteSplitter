@@ -73,3 +73,37 @@ describe('computeSections', () => {
     expect(sections[0]!.powerWatts).toBe(300);
   });
 });
+
+describe('computeSections — CdA a soglie multiple (cdaUsed per sezione)', () => {
+  it('senza cdaTiers configurato, cdaUsed coincide sempre con params.cda', () => {
+    const points = flatRoute(10);
+    const breakpoints: SectionBreakpoint[] = [
+      { id: 'start', distKm: 0, fixed: 'start', sectionLabel: null, speedKmh: null, powerWatts: null },
+      { id: 'finish', distKm: 10, fixed: 'finish', sectionLabel: 'S1', speedKmh: 30, powerWatts: null }
+    ];
+    const sections = computeSections(breakpoints, points, params, 'speed');
+    expect(sections[0]!.cdaUsed).toBe(params.cda);
+  });
+
+  it('con una soglia configurata, una sezione in piano usa il CdA base e una in forte salita usa quello di soglia', () => {
+    const dualParams: PhysicsParams = { ...params, cda: 0.28, cdaTiers: [{ thresholdPct: 5, cda: 0.4 }] };
+    // Percorso con un tratto piatto (0->5km) seguito da una rampa ripida (5->6km, +150m => 15%).
+    const raw = [
+      { lat: 45.0, lon: 11.0, ele: 100 },
+      { lat: 45.045, lon: 11.0, ele: 100 }, // ~5km in piano
+      { lat: 45.054, lon: 11.0, ele: 250 } // ~1km al 15% di pendenza
+    ];
+    const points = processRoute(raw).points;
+    const totalKm = points[points.length - 1]!.dist / 1000;
+    const breakpoints: SectionBreakpoint[] = [
+      { id: 'start', distKm: 0, fixed: 'start', sectionLabel: null, speedKmh: null, powerWatts: null },
+      { id: 'bp1', distKm: totalKm * 0.83, fixed: false, sectionLabel: 'piano', speedKmh: 30, powerWatts: null },
+      { id: 'finish', distKm: totalKm, fixed: 'finish', sectionLabel: 'salita', speedKmh: 12, powerWatts: null }
+    ];
+    const sections = computeSections(breakpoints, points, dualParams, 'speed');
+    expect(sections[0]!.gradient).toBeLessThan(5);
+    expect(sections[0]!.cdaUsed).toBe(0.28);
+    expect(sections[1]!.gradient).toBeGreaterThanOrEqual(5);
+    expect(sections[1]!.cdaUsed).toBe(0.4);
+  });
+});

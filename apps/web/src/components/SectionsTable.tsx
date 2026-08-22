@@ -5,6 +5,9 @@ import { formatTime } from '../lib/formatTime.js';
 interface SectionsTableProps {
   sections: SectionResult[];
   calcMode: 'speed' | 'power';
+  /** Mostra la colonna CdA solo quando è attivo un CdA duale (piano/salita) — altrimenti
+   * sarebbe una colonna identica su ogni riga, rumore senza informazione. */
+  showCda?: boolean;
   onUpdateLabel: (id: string, label: string) => void;
   onUpdateSpeed: (id: string, speedKmh: number) => void;
   onUpdatePower: (id: string, powerWatts: number) => void;
@@ -23,7 +26,7 @@ function windBadge(headwindKmh: number) {
   );
 }
 
-export function SectionsTable({ sections, calcMode, onUpdateLabel, onUpdateSpeed, onUpdatePower, onRemove }: SectionsTableProps) {
+export function SectionsTable({ sections, calcMode, showCda = false, onUpdateLabel, onUpdateSpeed, onUpdatePower, onRemove }: SectionsTableProps) {
   if (sections.length === 0) {
     return <p className="sections-table-empty">Nessuna sezione: aggiungi un punto sulla mappa o sul grafico.</p>;
   }
@@ -44,6 +47,7 @@ export function SectionsTable({ sections, calcMode, onUpdateLabel, onUpdateSpeed
             <th>D+</th>
             <th>D−</th>
             <th>Pend.</th>
+            {showCda && <th>CdA</th>}
             <th>Vento</th>
             <th>VAM</th>
             {calcMode === 'power' ? <th>Potenza</th> : <th>Potenza (calc.)</th>}
@@ -78,6 +82,7 @@ export function SectionsTable({ sections, calcMode, onUpdateLabel, onUpdateSpeed
                   {s.gradient >= 0 ? '+' : ''}
                   {s.gradient.toFixed(1)}%
                 </td>
+                {showCda && <td className="mono cda-cell">{s.cdaUsed.toFixed(3)}</td>}
                 <td className="mono wind-cell">{windBadge(s.windHeadwindKmh)}</td>
                 <td className="mono vam">{s.timeHours > 0 ? `${s.vam >= 0 ? '+' : ''}${Math.round(s.vam)} m/h` : '—'}</td>
                 {calcMode === 'power' ? (
@@ -109,7 +114,7 @@ export function SectionsTable({ sections, calcMode, onUpdateLabel, onUpdateSpeed
             <td className="mono dist">{last.cumDistKm.toFixed(2)} km</td>
             <td className="mono gain">+{Math.round(totalGain)} m</td>
             <td className="mono loss">−{Math.round(totalLoss)} m</td>
-            <td colSpan={3} />
+            <td colSpan={showCda ? 4 : 3} />
             <td />
             <td className="mono">{Math.round(last.cumAvgPowerWatts)} W</td>
             <td />
