@@ -16,6 +16,7 @@ import { PhysicsParamsPanel } from './PhysicsParamsPanel.js';
 import { SectionsTable } from './SectionsTable.js';
 import { PacingOptimizerPanel } from './PacingOptimizerPanel.js';
 import { CdaEstimator } from './CdaEstimator.js';
+import { ActivityAnalysisView } from './ActivityAnalysisView.js';
 import { NumberField } from './NumberField.js';
 import { ReportView } from './ReportView.js';
 import { WindZonesPanel } from './WindZonesPanel.js';
@@ -33,12 +34,22 @@ export function RouteSplitterApp() {
   const [smoothingRadiusMeters, setSmoothingRadiusMeters] = useState(50);
   const [hoverPoint, setHoverPoint] = useState<{ lat: number; lon: number } | null>(null);
   const [physicsParams, setPhysicsParams] = useState<PhysicsParams>(DEFAULT_PHYSICS_PARAMS);
+  // Condivisa fra CdaEstimator (campione singolo) e CdaFromActivityCard (multi-punto da
+  // file): stesso target 'base' | indice-soglia, stessa semantica di scrittura su cdaTiers.
+  const applyCda = useCallback((cda: number, target: 'base' | number) => {
+    setPhysicsParams(p => {
+      if (target === 'base') return { ...p, cda };
+      const tiers = (p.cdaTiers ?? []).map((t, i) => (i === target ? { ...t, cda } : t));
+      return { ...p, cdaTiers: tiers };
+    });
+  }, []);
   const [addMode, setAddMode] = useState(false);
   const [manualKm, setManualKm] = useState(0);
   const [everyKm, setEveryKm] = useState(0.25);
   const [startTime, setStartTime] = useState('');
   const [reportExporting, setReportExporting] = useState(false);
   const [selectedWindZoneId, setSelectedWindZoneId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'route' | 'activity'>('route');
   const importInputRef = useRef<HTMLInputElement>(null);
 
   const processedPoints = useMemo<ProcessedPoint[]>(() => {
@@ -223,7 +234,19 @@ export function RouteSplitterApp() {
         <h1>RouteSplitter</h1>
       </div>
 
-      {!selectedRoute ? (
+      <div className="app-tabs">
+        <button type="button" className={`app-tab-btn${activeTab === 'route' ? ' active' : ''}`} onClick={() => setActiveTab('route')}>
+          🗺️ Percorso
+        </button>
+        <button type="button" className={`app-tab-btn${activeTab === 'activity' ? ' active' : ''}`} onClick={() => setActiveTab('activity')}>
+          📊 Analisi Attività (FIT/TCX/GPX)
+        </button>
+      </div>
+
+      {activeTab === 'activity' && <ActivityAnalysisView physicsParams={physicsParams} onApplyCda={applyCda} />}
+
+      {activeTab === 'route' && (
+      !selectedRoute ? (
         <div className="upload-panel">
           <UploadZone onFile={handleFile} busy={busy} />
           {error && <p className="app-error">{error}</p>}
@@ -272,16 +295,7 @@ export function RouteSplitterApp() {
             onCalcModeChange={mode => void setCalcMode(mode)}
           />
 
-          <CdaEstimator
-            physicsParams={physicsParams}
-            onApplyCda={(cda, target) =>
-              setPhysicsParams(p => {
-                if (target === 'base') return { ...p, cda };
-                const tiers = (p.cdaTiers ?? []).map((t, i) => (i === target ? { ...t, cda } : t));
-                return { ...p, cdaTiers: tiers };
-              })
-            }
-          />
+          <CdaEstimator physicsParams={physicsParams} onApplyCda={applyCda} />
 
           {plan && selectedRoute && (
             <WindZonesPanel
@@ -434,8 +448,9 @@ export function RouteSplitterApp() {
               onDonePrinting={() => setReportExporting(false)}
             />
           )}
-        </>
-      )}
+          </>
+          )
+          )}
 
       <footer className="app-footer">
         <a href="https://linktr.ee/bonvicin.coaching" target="_blank" rel="noopener noreferrer">

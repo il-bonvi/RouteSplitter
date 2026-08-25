@@ -12,6 +12,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@garmin/fitsdk": "^21.213.0",
     "d3": "^7.9.0",
     "dexie": "^4.0.8",
     "leaflet": "^1.9.4",
