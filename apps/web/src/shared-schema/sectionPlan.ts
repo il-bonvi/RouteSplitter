@@ -13,6 +13,18 @@ export const BreakpointSchema = z.object({
 });
 export type Breakpoint = z.infer<typeof BreakpointSchema>;
 
+/**
+ * Campione vento a un'ora del giorno precisa, per una zona — vedi commento in
+ * physics-core/wind.ts. Opzionale (0 = comportamento storico, vento statico).
+ */
+export const WindTimeSampleSchema = z.object({
+  id: IdSchema,
+  minuteOfDay: z.number().min(0).max(1439),
+  speedKmh: z.number().min(0).max(150),
+  directionDeg: z.number().min(0).max(360)
+});
+export type WindTimeSample = z.infer<typeof WindTimeSampleSchema>;
+
 /** Confine di zona vento — stessa struttura concettuale dei breakpoint di sezione. */
 export const WindZoneBoundarySchema = z.object({
   id: IdSchema,
@@ -21,7 +33,10 @@ export const WindZoneBoundarySchema = z.object({
   /** Intensità del vento, km/h. null solo per il confine 'start' (non ha un tratto precedente). */
   speedKmh: z.number().min(0).max(150).nullable(),
   /** Direzione DA cui soffia il vento, gradi bussola [0,360). null solo per 'start'. */
-  directionDeg: z.number().min(0).max(360).nullable()
+  directionDeg: z.number().min(0).max(360).nullable(),
+  /** Vuoto/assente = vento statico (comportamento storico). Tetto a 12: oltre non ha senso
+   * pratico per una singola zona (un forecast tipico copre poche ore per punto). */
+  timeSamples: z.array(WindTimeSampleSchema).max(12).default([])
 });
 export type WindZoneBoundary = z.infer<typeof WindZoneBoundarySchema>;
 
@@ -50,7 +65,15 @@ export const SectionPlanSchema = EntityBaseSchema.extend({
   /** Ordinati per distKm crescente; sempre almeno un punto 'start' e uno 'finish'. */
   breakpoints: z.array(BreakpointSchema).min(2),
   /** Vuoto = vento non configurato (equivale a 0). Se presente, stesso vincolo start/finish dei breakpoint. */
-  windZones: z.array(WindZoneBoundarySchema).default([])
+  windZones: z.array(WindZoneBoundarySchema).default([]),
+  /**
+   * Ora di partenza pianificata, formato "HH:mm", null = non impostata. Unica fonte per
+   * "che ora è" lungo il piano: usata sia dal report PDF (già presente prima come stato
+   * locale non persistito) sia — da questa versione — per interpretare i `timeSamples`
+   * delle zone vento (senza un'ora di partenza nota, un campione vento a un'ora precisa
+   * non si può collocare sul percorso, si ricade sul valore statico della zona).
+   */
+  plannedStartTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().default(null)
 })
   .refine(val => startsAndEndsFixed(val.breakpoints), {
     message: 'Il primo breakpoint deve essere "start" e l\'ultimo "finish".'
@@ -74,7 +97,8 @@ export const CreateSectionPlanInputSchema = z
     defaultSpeedKmh: z.number().min(0).max(150).default(40),
     defaultPowerWatts: z.number().min(0).max(3000).default(250),
     breakpoints: z.array(BreakpointSchema).min(2),
-    windZones: z.array(WindZoneBoundarySchema).default([])
+    windZones: z.array(WindZoneBoundarySchema).default([]),
+    plannedStartTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().default(null)
   })
   .refine(val => startsAndEndsFixed(val.breakpoints), {
     message: 'Il primo breakpoint deve essere "start" e l\'ultimo "finish".'

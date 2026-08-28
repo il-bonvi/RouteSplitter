@@ -1,4 +1,4 @@
-import { processRoute, type ProcessedPoint, type RawTrackPoint } from '@physics-core';
+import { processRoute, getInterpolatedPoint, haversine, type ProcessedPoint, type RawTrackPoint } from '@physics-core';
 import type { ActivityTrackPoint } from './parseActivityFile.js';
 
 export interface ActivityDisplayPoint extends ProcessedPoint {
@@ -6,6 +6,35 @@ export interface ActivityDisplayPoint extends ProcessedPoint {
   /** velocità istantanea grezza fra questo punto e il precedente, km/h. null sul primo punto. */
   speedKmh: number | null;
   timeSec: number;
+}
+
+/**
+ * Sostituisce la quota di ogni punto attività con quella interpolata dal PERCORSO
+ * PIANIFICATO (`routePoints`, il GPX caricato per quel percorso) alla stessa distanza
+ * percorsa — non alla stessa quota registrata dal device. Utile quando il device (barometro
+ * o GPS) è impreciso: i GPX di un percorso pianificato sono in genere più puliti (spesso
+ * corretti da chi li ha creati, es. con dati SRTM), quindi possono essere una sorgente di
+ * quota più affidabile della registrazione del singolo giro.
+ *
+ * La distanza percorsa dall'attività si calcola SOLO da lat/lon (haversine, indipendente
+ * dalla quota — vedi `processRoute`), quindi può essere calcolata prima di sapere quale
+ * sorgente di quota si userà. Assunzione implicita (la stessa già usata in tutto il resto di
+ * questo confronto, es. nel bucketing per sezione): l'attività segue approssimativamente lo
+ * stesso percorso, quindi "stessa distanza percorsa" ≈ "stesso punto del percorso".
+ */
+export function remapElevationFromRoute(points: ActivityTrackPoint[], routePoints: ProcessedPoint[]): ActivityTrackPoint[] {
+  const valid = points.filter(p => Number.isFinite(p.lat) && Number.isFinite(p.lon) && Number.isFinite(p.timeSec));
+  if (valid.length < 2 || routePoints.length < 2) return points;
+
+  let cumDistM = 0;
+  const remapped: ActivityTrackPoint[] = [{ ...valid[0]!, ele: getInterpolatedPoint(routePoints, 0).ele }];
+  for (let i = 1; i < valid.length; i++) {
+    const prev = valid[i - 1]!;
+    const curr = valid[i]!;
+    cumDistM += haversine(prev.lat, prev.lon, curr.lat, curr.lon);
+    remapped.push({ ...curr, ele: getInterpolatedPoint(routePoints, cumDistM).ele });
+  }
+  return remapped;
 }
 
 export interface ActivityDisplay {
@@ -18,6 +47,24 @@ export interface ActivityDisplay {
   maxPowerW: number | null;
   avgSpeedKmh: number;
   maxSpeedKmh: number;
+}
+
+/** Tempo (secondi da inizio attività) del punto più vicino a `km` — ricerca lineare, va
+ * benissimo per il numero di sezioni/bucket tipico (poche decine al massimo). Condivisa fra
+ * l'analisi attività (F3.1) e il confronto pianificato-vs-reale (F3.3): stessa tecnica di
+ * associazione distanza→tempo, un solo posto dove sta la logica. */
+export function nearestPointTimeSec(points: ActivityDisplayPoint[], km: number): number {
+  const targetM = km * 1000;
+  let nearest = points[0]!;
+  let minDiff = Infinity;
+  for (const p of points) {
+    const diff = Math.abs(p.dist - targetM);
+    if (diff < minDiff) {
+      minDiff = diff;
+      nearest = p;
+    }
+  }
+  return nearest.timeSec;
 }
 
 /**

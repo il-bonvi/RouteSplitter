@@ -107,3 +107,49 @@ describe('computeSections — CdA a soglie multiple (cdaUsed per sezione)', () =
     expect(sections[1]!.cdaUsed).toBe(0.4);
   });
 });
+
+describe('computeSections — vento time-aware (plannedStartMinuteOfDay)', () => {
+  it('senza plannedStartMinuteOfDay, una zona con timeSamples ricade sul valore statico', () => {
+    const points = flatRoute(20);
+    const breakpoints: SectionBreakpoint[] = [
+      { id: 'start', distKm: 0, fixed: 'start', sectionLabel: null, speedKmh: null, powerWatts: null },
+      { id: 'finish', distKm: 20, fixed: 'finish', sectionLabel: 'S1', speedKmh: 30, powerWatts: null }
+    ];
+    const windZones = [
+      { id: 'ws', distKm: 0, fixed: 'start' as const, speedKmh: null, directionDeg: null, timeSamples: [] },
+      {
+        id: 'wf',
+        distKm: 20,
+        fixed: 'finish' as const,
+        speedKmh: 5,
+        directionDeg: 0,
+        timeSamples: [{ id: 't1', minuteOfDay: 600, speedKmh: 25, directionDeg: 0 }]
+      }
+    ];
+    const sections = computeSections(breakpoints, points, params, 'speed', 250, windZones, null);
+    // Il percorso va verso Nord (bearing ~0), vento da Nord (dir 0) = in testa => atteso ~5 (statico), non ~25
+    expect(Math.abs(sections[0]!.windHeadwindKmh)).toBeCloseTo(5, 0);
+  });
+
+  it('con plannedStartMinuteOfDay, usa il vento interpolato nel tempo per la zona attiva', () => {
+    const points = flatRoute(20);
+    const breakpoints: SectionBreakpoint[] = [
+      { id: 'start', distKm: 0, fixed: 'start', sectionLabel: null, speedKmh: null, powerWatts: null },
+      { id: 'finish', distKm: 20, fixed: 'finish', sectionLabel: 'S1', speedKmh: 30, powerWatts: null }
+    ];
+    const windZones = [
+      { id: 'ws', distKm: 0, fixed: 'start' as const, speedKmh: null, directionDeg: null, timeSamples: [] },
+      {
+        id: 'wf',
+        distKm: 20,
+        fixed: 'finish' as const,
+        speedKmh: 5,
+        directionDeg: 0,
+        timeSamples: [{ id: 't1', minuteOfDay: 480, speedKmh: 25, directionDeg: 0 }]
+      }
+    ];
+    // Partenza alle 8:00 (480 min) — la sezione inizia a t=0 quindi minuteOfDay=480 esatto
+    const sections = computeSections(breakpoints, points, params, 'speed', 250, windZones, 480);
+    expect(Math.abs(sections[0]!.windHeadwindKmh)).toBeCloseTo(25, 0);
+  });
+});

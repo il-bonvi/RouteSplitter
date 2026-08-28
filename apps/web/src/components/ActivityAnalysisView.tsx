@@ -13,7 +13,7 @@ import {
 } from '@physics-core';
 import { parseActivityText, type ActivityTrackPoint } from '../activity/parseActivityFile.js';
 import { buildCdaSamples } from '../activity/activitySamples.js';
-import { buildActivityDisplay, type ActivityDisplayPoint } from '../activity/buildActivityDisplay.js';
+import { buildActivityDisplay, nearestPointTimeSec } from '../activity/buildActivityDisplay.js';
 import { RouteMap, type MapWindControlData } from './RouteMap.js';
 import { ActivityElevationChart } from './ActivityElevationChart.js';
 import { formatTime } from '../lib/formatTime.js';
@@ -55,23 +55,6 @@ interface ActivitySectionRow {
 }
 
 const MIN_CDA_SAMPLES = 20;
-
-/** Punto più vicino a una distanza data — stessa tecnica di ricerca lineare già usata
- * altrove nell'app (es. RouteMap) per associare un punto a una distanza; sufficientemente
- * veloce per il numero di sezioni tipico di una tabella (poche decine al massimo). */
-function nearestPointTimeSec(points: ActivityDisplayPoint[], km: number): number {
-  const targetM = km * 1000;
-  let nearest = points[0]!;
-  let minDiff = Infinity;
-  for (const p of points) {
-    const diff = Math.abs(p.dist - targetM);
-    if (diff < minDiff) {
-      minDiff = diff;
-      nearest = p;
-    }
-  }
-  return nearest.timeSec;
-}
 
 function windBadge(headwindKmh: number) {
   if (Math.abs(headwindKmh) < 0.5) {

@@ -39,6 +39,14 @@ interface ActivityElevationChartProps {
   onAddBreakpoint: (distKm: number) => void;
   onRemoveBreakpoint: (id: string) => void;
   windZones?: WindZoneBoundary[];
+  /** Confronto pianificato-vs-reale (F3.3): se presente, disegna una seconda linea di
+   * potenza (tratteggiata) sullo stesso asse destro, per sovrapporre "cosa prevedeva il
+   * piano" a "cosa mostrano i dati". Opzionale — assente/vuoto = comportamento identico a
+   * prima (nessuna riga aggiuntiva), così F3.1 non cambia. */
+  plannedPowerSeries?: Array<{ distKm: number; powerWatts: number }>;
+  /** Distanze (km) delle microsezioni automatiche (griglia fine F3.3), disegnate come tacche
+   * verticali leggere. Vuoto/assente = nessuna tacca (comportamento invariato per F3.1). */
+  microBoundariesKm?: number[];
 }
 
 interface ChartDatum extends ChartPoint {
@@ -82,7 +90,9 @@ export function ActivityElevationChart({
   addMode,
   onAddBreakpoint,
   onRemoveBreakpoint,
-  windZones = []
+  windZones = [],
+  plannedPowerSeries = [],
+  microBoundariesKm = []
 }: ActivityElevationChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [zoomDomain, setZoomDomain] = useState<[number, number] | null>(null);
@@ -184,8 +194,11 @@ export function ActivityElevationChart({
     const yScale = d3.scaleLinear().domain([yMin, yMax]).range([H, 0]);
 
     const powerValues = visibleData.map(d => d.powerW).filter((w): w is number => w != null);
-    const powerMax = powerValues.length > 0 ? Math.max(...powerValues) * 1.15 : 0;
+    const plannedPowerValues = plannedPowerSeries.filter(p => p.distKm >= d0 && p.distKm <= d1).map(p => p.powerWatts);
+    const allPowerValues = [...powerValues, ...plannedPowerValues];
+    const powerMax = allPowerValues.length > 0 ? Math.max(...allPowerValues) * 1.15 : 0;
     const yScalePower = d3.scaleLinear().domain([0, powerMax || 1]).range([H, 0]);
+    const showPowerAxis = hasPower || plannedPowerSeries.length > 1;
 
     const svg = d3
       .select(container)
@@ -211,7 +224,7 @@ export function ActivityElevationChart({
       .selectAll('text')
       .style('font-size', '10px')
       .style('fill', '#6b7280');
-    if (hasPower) {
+    if (showPowerAxis) {
       g.append('g')
         .attr('transform', `translate(${W},0)`)
         .call(d3.axisRight(yScalePower).ticks(6).tickFormat(d => `${d} W`))
@@ -228,11 +241,31 @@ export function ActivityElevationChart({
 
     g.selectAll('.domain').style('stroke', '#d1d5db');
 
+    if (microBoundariesKm.length > 0) {
+      // Tacche sottili non interattive alle distanze delle microsezioni (griglia automatica
+      // F3.3) — deliberatamente senza numeri/cerchi come i breakpoint veri (potrebbero
+      // essere centinaia): solo un riferimento visivo di dove cade ogni bin.
+      g.append('g')
+        .attr('class', 'micro-boundaries')
+        .attr('pointer-events', 'none')
+        .selectAll('line')
+        .data(microBoundariesKm.filter(km => km >= d0 && km <= d1))
+        .join('line')
+        .attr('x1', km => xScale(km))
+        .attr('x2', km => xScale(km))
+        .attr('y1', 0)
+        .attr('y2', H)
+        .attr('stroke', '#a78bfa')
+        .attr('stroke-width', 1)
+        .attr('stroke-dasharray', '2,3')
+        .attr('opacity', 0.55);
+    }
+
     if (windZones.length >= 2 && windMaxAbs > 0) {
       const bandH = 7;
       const bandY = -bandH - 5;
       const bandSamples = 110;
-      const windG = g.append('g').attr('class', 'wind-band');
+      const windG = g.append('g').attr('class', 'wind-band').attr('pointer-events', 'none');
       const stepKm = (d1 - d0) / bandSamples;
       for (let i = 0; i < bandSamples; i++) {
         const kmStart = d0 + i * stepKm;
@@ -253,7 +286,16 @@ export function ActivityElevationChart({
       }
     }
 
-    const chartG = g.append('g').attr('clip-path', 'url(#activity-elev-clip)');
+    // pointer-events:none su tutto il gruppo dati (segmenti colorati, linee breakpoint,
+    // testo): senza questo, il mouse FERMO sopra una di queste forme "piene" (fill/stroke
+    // non trasparenti al puntatore, default SVG) veniva considerato dal browser sopra
+    // QUELLA forma invece che sopra l'overlay del brush sottostante — anche se il brush è
+    // appeso dopo (quindi visivamente sopra), l'hit-test del browser per un punto fermo può
+    // comunque risolvere sull'elemento con contenuto "dipinto" più vicino se le due aree si
+    // sovrappongono esattamente; il risultato visibile era l'hover che spariva restando
+    // fermi. Il cerchio dei breakpoint riabilita esplicitamente pointer-events (deve
+    // restare cliccabile per la rimozione).
+    const chartG = g.append('g').attr('clip-path', 'url(#activity-elev-clip)').attr('pointer-events', 'none');
     for (let i = 1; i < displayData.length; i++) {
       const p1 = displayData[i - 1]!;
       const p2 = displayData[i]!;
@@ -281,7 +323,26 @@ export function ActivityElevationChart({
         .attr('stroke', '#fc5200')
         .attr('stroke-width', 1.6)
         .attr('opacity', 0.9)
+        .attr('pointer-events', 'none')
         .attr('d', powerLine);
+    }
+
+    if (plannedPowerSeries.length > 1) {
+      const plannedLine = d3
+        .line<{ distKm: number; powerWatts: number }>()
+        .x(d => xScale(d.distKm))
+        .y(d => yScalePower(d.powerWatts))
+        .curve(d3.curveMonotoneX);
+      g.append('path')
+        .datum(plannedPowerSeries)
+        .attr('clip-path', 'url(#activity-elev-clip)')
+        .attr('fill', 'none')
+        .attr('stroke', '#7c9cff')
+        .attr('stroke-width', 1.8)
+        .attr('stroke-dasharray', '6,4')
+        .attr('opacity', 0.95)
+        .attr('pointer-events', 'none')
+        .attr('d', plannedLine);
     }
 
     if (isZoomed) {
@@ -308,6 +369,7 @@ export function ActivityElevationChart({
         .attr('fill', color)
         .attr('stroke', '#fff')
         .attr('stroke-width', 2)
+        .attr('pointer-events', 'auto')
         .style('cursor', bp.fixed ? 'default' : 'pointer')
         .on('click', event => {
           event.stopPropagation();
@@ -349,13 +411,14 @@ export function ActivityElevationChart({
     const bisectDist = d3.bisector<ChartDatum, number>(d => d.dist).left;
 
     function updateHover(clientX: number, clientY: number, svgX: number) {
-      const dist = xScale.invert(svgX);
+      // Vedi commento nella stessa funzione in ElevationChart.tsx: clampato a [d0,d1] per
+      // evitare che l'hover resti "bloccato" vicino ai bordi del grafico.
+      const dist = Math.max(d0, Math.min(d1, xScale.invert(svgX)));
       const idx = bisectDist(fullData, dist);
       const a = fullData[Math.max(0, idx - 1)];
       const b = fullData[Math.min(fullData.length - 1, idx)];
       if (!a || !b) return;
       const point = Math.abs(a.dist - dist) < Math.abs(b.dist - dist) ? a : b;
-      if (point.dist < d0 || point.dist > d1) return;
 
       const cx = xScale(point.dist);
       const cy = yScale(point.ele);
@@ -446,7 +509,7 @@ export function ActivityElevationChart({
       tooltip!.style.display = 'none';
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fullData, zoomDomain, breakpoints, addMode, points, windZones, windMaxAbs, hasPower]);
+  }, [fullData, zoomDomain, breakpoints, addMode, points, windZones, windMaxAbs, hasPower, plannedPowerSeries, microBoundariesKm]);
 
   if (points.length < 2) return null;
 
@@ -481,6 +544,24 @@ export function ActivityElevationChart({
         </div>
       </div>
       <div ref={containerRef} className="elevation-chart" />
+      {plannedPowerSeries.length > 1 && (
+        <div className="wind-ribbon-legend elevation-power-legend">
+          <span>
+            <i style={{ background: '#fc5200' }} /> potenza reale
+          </span>
+          <span>
+            <i
+              style={{
+                background: 'repeating-linear-gradient(to right, #7c9cff 0 5px, transparent 5px 8px)',
+                width: 16,
+                height: 3,
+                borderRadius: 0
+              }}
+            />{' '}
+            potenza pianificata
+          </span>
+        </div>
+      )}
       {windZones.length >= 2 && (
         <div className="wind-ribbon-legend elevation-wind-legend">
           <span>

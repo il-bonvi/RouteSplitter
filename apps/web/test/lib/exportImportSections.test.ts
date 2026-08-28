@@ -13,6 +13,7 @@ const plan: SectionPlan = {
   defaultSpeedKmh: 40,
   defaultPowerWatts: 250,
   windZones: [],
+  plannedStartTime: null,
   breakpoints: [
     { id: 'start', distKm: 0, fixed: 'start', sectionLabel: null, speedKmh: null, powerWatts: null },
     { id: 'mid', distKm: 10, fixed: false, sectionLabel: 'S1', speedKmh: 35, powerWatts: null },
@@ -73,9 +74,9 @@ describe('parseSectionsImport — zone vento', () => {
   const windPlan: SectionPlan = {
     ...plan,
     windZones: [
-      { id: 'w1', distKm: 0, fixed: 'start', speedKmh: null, directionDeg: null },
-      { id: 'w2', distKm: 10, fixed: false, speedKmh: 15, directionDeg: 90 },
-      { id: 'w3', distKm: 20, fixed: 'finish', speedKmh: 25, directionDeg: 270 }
+      { id: 'w1', distKm: 0, fixed: 'start', speedKmh: null, directionDeg: null , timeSamples: [] },
+      { id: 'w2', distKm: 10, fixed: false, speedKmh: 15, directionDeg: 90 , timeSamples: [] },
+      { id: 'w3', distKm: 20, fixed: 'finish', speedKmh: 25, directionDeg: 270 , timeSamples: [] }
     ]
   };
 

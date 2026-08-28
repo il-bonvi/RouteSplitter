@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { processRoute, computeSections, type ProcessedPoint } from '@physics-core';
+import { processRoute, computeSections, parseClockTimeToMinutes, type ProcessedPoint } from '@physics-core';
 import { DEFAULT_PHYSICS_PARAMS, type Route, type RawTrackPoint, type PhysicsParams } from '@shared-schema';
 import { useDataStore } from '../lib/DataStoreContext.js';
 import { useSectionPlan } from '../hooks/useSectionPlan.js';
@@ -17,6 +17,7 @@ import { SectionsTable } from './SectionsTable.js';
 import { PacingOptimizerPanel } from './PacingOptimizerPanel.js';
 import { CdaEstimator } from './CdaEstimator.js';
 import { ActivityAnalysisView } from './ActivityAnalysisView.js';
+import { PlanVsActualView } from './PlanVsActualView.js';
 import { NumberField } from './NumberField.js';
 import { ReportView } from './ReportView.js';
 import { WindZonesPanel } from './WindZonesPanel.js';
@@ -46,10 +47,9 @@ export function RouteSplitterApp() {
   const [addMode, setAddMode] = useState(false);
   const [manualKm, setManualKm] = useState(0);
   const [everyKm, setEveryKm] = useState(0.25);
-  const [startTime, setStartTime] = useState('');
   const [reportExporting, setReportExporting] = useState(false);
   const [selectedWindZoneId, setSelectedWindZoneId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'route' | 'activity'>('route');
+  const [activeTab, setActiveTab] = useState<'route' | 'activity' | 'compare'>('route');
   const importInputRef = useRef<HTMLInputElement>(null);
 
   const processedPoints = useMemo<ProcessedPoint[]>(() => {
@@ -72,14 +72,26 @@ export function RouteSplitterApp() {
     addWindZoneBoundary,
     removeWindZoneBoundary,
     updateWindZone,
-    resetWindZones
+    addWindTimeSample,
+    removeWindTimeSample,
+    resetWindZones,
+    setPlannedStartTime
   } = useSectionPlan(selectedRoute?.id ?? null, selectedRoute?.distanceKm ?? 0);
 
   const defaultPowerWatts = plan?.defaultPowerWatts ?? 250;
+  const startTime = plan?.plannedStartTime ?? '';
 
   const sections = useMemo(() => {
     if (!plan || processedPoints.length < 2) return [];
-    return computeSections(plan.breakpoints, processedPoints, physicsParams, plan.calcMode, defaultPowerWatts, plan.windZones);
+    return computeSections(
+      plan.breakpoints,
+      processedPoints,
+      physicsParams,
+      plan.calcMode,
+      defaultPowerWatts,
+      plan.windZones,
+      parseClockTimeToMinutes(plan.plannedStartTime)
+    );
   }, [plan, processedPoints, physicsParams, defaultPowerWatts]);
 
   const sortedWindZones = useMemo(() => [...(plan?.windZones ?? [])].sort((a, b) => a.distKm - b.distKm), [plan?.windZones]);
@@ -215,6 +227,9 @@ export function RouteSplitterApp() {
           defaultSpeedKmh: parsed.defaultSpeedKmh ?? undefined,
           windZones: parsed.windZones ?? undefined
         });
+        if (parsed.plannedStartTime != null) {
+          await setPlannedStartTime(parsed.plannedStartTime);
+        }
         if (parsed.routeName) {
           const updated = await store.routes.update(selectedRoute.id, { name: parsed.routeName });
           setSelectedRoute(updated);
@@ -241,9 +256,14 @@ export function RouteSplitterApp() {
         <button type="button" className={`app-tab-btn${activeTab === 'activity' ? ' active' : ''}`} onClick={() => setActiveTab('activity')}>
           📊 Analisi Attività (FIT/TCX/GPX)
         </button>
+        <button type="button" className={`app-tab-btn${activeTab === 'compare' ? ' active' : ''}`} onClick={() => setActiveTab('compare')}>
+          ⚖️ Confronto Pianificato/Reale
+        </button>
       </div>
 
       {activeTab === 'activity' && <ActivityAnalysisView physicsParams={physicsParams} onApplyCda={applyCda} />}
+
+      {activeTab === 'compare' && <PlanVsActualView physicsParams={physicsParams} onPhysicsParamsChange={setPhysicsParams} />}
 
       {activeTab === 'route' && (
       !selectedRoute ? (
@@ -269,7 +289,7 @@ export function RouteSplitterApp() {
             />
             <label className="start-time-field">
               Ora partenza (opz.)
-              <input type="time" value={startTime} onChange={e => setStartTime(e.target.value)} />
+              <input type="time" value={startTime} onChange={e => setPlannedStartTime(e.target.value || null)} />
             </label>
             <button
               type="button"
@@ -306,6 +326,9 @@ export function RouteSplitterApp() {
               onAddBoundary={distKm => void addWindZoneBoundary(distKm)}
               onRemoveBoundary={id => void removeWindZoneBoundary(id)}
               onReset={() => void resetWindZones()}
+              plannedStartTime={plan.plannedStartTime}
+              onAddTimeSample={(zoneId, minuteOfDay, speedKmh, directionDeg) => void addWindTimeSample(zoneId, minuteOfDay, speedKmh, directionDeg)}
+              onRemoveTimeSample={(zoneId, sampleId) => void removeWindTimeSample(zoneId, sampleId)}
             />
           )}
 

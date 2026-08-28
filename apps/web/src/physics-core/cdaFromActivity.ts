@@ -1,5 +1,5 @@
 import type { PhysicsParams } from './types.js';
-import { GRAVITY } from './physics.js';
+import { GRAVITY, effectiveCda } from './physics.js';
 
 /** Un campione istantaneo (o mediato su una finestra breve) di un'attività reale. */
 export interface CdaSample {
@@ -92,6 +92,73 @@ export function estimateCdaFromSamples(samples: CdaSample[], params: PhysicsPara
   return {
     cda,
     usedSamples: perPointCda.length,
+    totalSamples: samples.length,
+    stdDev: Math.sqrt(variance)
+  };
+}
+
+export interface WindEstimateResult {
+  /** Vento efficace medio stimato, km/h (+testa, -coda) — stessa convenzione di params.windKmh. */
+  windKmh: number;
+  usedSamples: number;
+  totalSamples: number;
+  /** Deviazione standard delle stime punto-per-punto — indicazione di quanto è rumoroso/
+   * variabile il vento reale durante l'uscita (raffiche, terreno complesso...), non un
+   * errore standard formale. Utile per giudicare quanto fidarsi del valore medio prima di
+   * confrontarlo con un vento pianificato o un forecast. */
+  stdDev: number;
+}
+
+const MIN_VALID_WIND_SAMPLES = 20;
+const MAX_PLAUSIBLE_WIND_KMH = 100;
+
+/**
+ * Stima il vento efficace (km/h, +testa/-coda) IMPLICITO in campioni reali di
+ * velocità/potenza/pendenza, dato un CdA noto o già stimato — l'inverso simmetrico di
+ * `estimateCdaFromSamples` (là si stima CdA a vento noto, qui si stima il vento a CdA
+ * noto). Usata per il confronto "pianificato vs reale" (F3.3): permette di sapere che
+ * vento ha davvero incontrato il ciclista in un tratto, da confrontare con il vento
+ * impostato nel piano (manuale o, in futuro, da forecast) — senza questo, l'unico modo di
+ * giudicare l'affidabilità di una stima/forecast vento sarebbe "a occhio".
+ *
+ * A differenza della stima CdA (che è una regressione lineare su tutti i campioni insieme,
+ * perché l'equazione È lineare nel CdA), qui il vento entra nell'equazione dentro il
+ * termine `rel·|rel|` — non lineare — quindi si risolve ANALITICAMENTE punto per punto
+ * (l'equazione ammette soluzione chiusa: dato aeroForce = 0.5·ρ·CdA·rel·|rel|, si isola
+ * rel = ±√(aeroForce / (0.5·ρ·CdA)), poi windMS = rel - speedMS) e si aggregano le stime
+ * per media — non una regressione ai minimi quadrati, ma comunque pesata implicitamente
+ * dal fatto che i campioni con poco segnale aerodinamico vengono scartati dagli stessi
+ * filtri già usati per il CdA (velocità/potenza minime, CdA implicito fuori range fisico).
+ */
+export function estimateWindFromSamples(samples: CdaSample[], params: PhysicsParams): WindEstimateResult | null {
+  const m = params.riderMassKg + params.bikeMassKg;
+  const windEstimates: number[] = [];
+
+  for (const s of samples) {
+    if (s.speedMS < 0.5 || s.powerW < 10) continue;
+    const cda = effectiveCda(params, s.gradientPct);
+    const slopeRad = Math.atan(s.gradientPct / 100);
+    const roll = params.crr * m * GRAVITY * Math.cos(slopeRad);
+    const grav = m * GRAVITY * Math.sin(slopeRad);
+    const effectivePower = s.powerW * (1 - params.drivetrainLossPct / 100);
+    const aeroForce = effectivePower / s.speedMS - roll - grav;
+    const denom = 0.5 * params.airDensity * cda;
+    if (denom <= 0) continue;
+    const x = aeroForce / denom; // = rel · |rel|
+    const rel = x >= 0 ? Math.sqrt(x) : -Math.sqrt(-x);
+    const windKmh = (rel - s.speedMS) * 3.6;
+    if (!Number.isFinite(windKmh) || Math.abs(windKmh) > MAX_PLAUSIBLE_WIND_KMH) continue;
+    windEstimates.push(windKmh);
+  }
+
+  if (windEstimates.length < MIN_VALID_WIND_SAMPLES) return null;
+
+  const mean = windEstimates.reduce((a, b) => a + b, 0) / windEstimates.length;
+  const variance = windEstimates.reduce((a, b) => a + (b - mean) ** 2, 0) / windEstimates.length;
+
+  return {
+    windKmh: mean,
+    usedSamples: windEstimates.length,
     totalSamples: samples.length,
     stdDev: Math.sqrt(variance)
   };

@@ -1,6 +1,6 @@
 import { speedFromPower, powerFromSpeed, effectiveCda } from './physics.js';
 import { computeGainLossBetween, getInterpolatedPoint, type ProcessedPoint } from './geo.js';
-import { windAtDistKm, routeBearingAtDistKm, effectiveHeadwindKmh, type WindZoneBoundary } from './wind.js';
+import { windAtDistKmTime, routeBearingAtDistKm, effectiveHeadwindKmh, type WindZoneBoundary } from './wind.js';
 import type { PhysicsParams } from './types.js';
 
 /**
@@ -66,7 +66,16 @@ export function computeSections(
   params: PhysicsParams,
   calcMode: CalcMode,
   defaultPowerWatts = 250,
-  windZones?: WindZoneBoundary[]
+  windZones?: WindZoneBoundary[],
+  /**
+   * Minuti da mezzanotte a cui si assume parta il giro (da `SectionPlan.plannedStartTime`,
+   * parsato con `parseClockTimeToMinutes`). Serve SOLO se una zona vento ha `timeSamples`
+   * configurati — altrimenti nessun effetto. Usato per calcolare l'ora assoluta di arrivo a
+   * ciascuna sezione (ora di partenza + tempo cumulato), sezione per sezione, in ordine: non
+   * c'è circolarità perché il tempo cumulato fino all'inizio della sezione corrente è già
+   * noto quando si calcola la sezione (nessuna dipendenza dal tempo della sezione stessa).
+   */
+  plannedStartMinuteOfDay?: number | null
 ): SectionResult[] {
   const sorted = [...breakpoints].sort((a, b) => a.distKm - b.distKm);
   const results: SectionResult[] = [];
@@ -94,7 +103,12 @@ export function computeSections(
     let effectiveParams = params;
     if (windZones && windZones.length >= 2) {
       const midKm = (from.distKm + to.distKm) / 2;
-      const wind = windAtDistKm(windZones, midKm);
+      // Ora assoluta all'INIZIO di questa sezione (tempo già trascorso, noto per costruzione
+      // dato l'ordine sequenziale del loop) — approssimazione accettata, stessa natura di
+      // "punto medio del tratto" già usata per bearing/zona vento qui sotto.
+      const minuteOfDay =
+        plannedStartMinuteOfDay != null ? (plannedStartMinuteOfDay + cumTime * 60) % 1440 : null;
+      const wind = windAtDistKmTime(windZones, midKm, minuteOfDay);
       if (wind) {
         const bearing = routeBearingAtDistKm(routePoints, midKm);
         windHeadwindKmh = effectiveHeadwindKmh(wind.speedKmh, wind.directionDeg, bearing);

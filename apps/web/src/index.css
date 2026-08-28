@@ -1328,6 +1328,54 @@ body {
   font-size: 0.75rem;
   color: var(--text-muted);
 }
+.wind-time-editor {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border);
+}
+.wind-time-hint {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border);
+}
+.wind-time-samples-list {
+  list-style: none;
+  margin: 8px 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.wind-time-samples-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.75rem;
+  color: var(--text);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+.wind-time-add-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.wind-time-add-row input[type='time'] {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--accent5);
+  font-family: 'JetBrains Mono', monospace;
+  padding: 6px 8px;
+}
+.wind-time-add-row span {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
 
 /* Bussola overlay sulla mappa Leaflet */
 .map-wind-control {
@@ -1443,6 +1491,9 @@ body {
   height: 10px;
   border-radius: 2px;
 }
+.elevation-power-legend {
+  margin-top: 2px;
+}
 .elevation-wind-legend {
   margin-top: 2px;
   padding-bottom: 4px;
@@ -1460,4 +1511,163 @@ body {
      sotto i 600 lasciava il canvas dietro l'intero contenuto della mappa. 690: sopra tutti i
      pannelli standard (fino a popupPane 700 escluso), sotto i controlli Leaflet (1000). */
   z-index: 690;
+}
+
+/* Confronto Pianificato vs Reale (F3.3) */
+.pva-selectors-panel {
+  max-width: 720px;
+}
+.pva-upload-row {
+  margin-top: 12px;
+}
+.pva-selectors {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.pva-selectors label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  flex: 1;
+  min-width: 220px;
+}
+.pva-selectors select,
+.pva-selectors input[type='time'] {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 8px 10px;
+  font-family: inherit;
+}
+.pva-section-divider {
+  margin: 24px 0 4px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.pva-wind-card {
+  border-color: var(--accent5);
+}
+.pva-delta {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 600;
+  font-size: 0.8rem;
+}
+.pva-delta-na {
+  color: var(--text-muted);
+}
+.pva-delta-good {
+  color: var(--accent2);
+}
+.pva-delta-bad {
+  color: var(--accent3);
+}
+.pva-flip-badge {
+  margin-left: 6px;
+  font-size: 0.65rem;
+  color: var(--accent3);
+}
+.pva-collapsible-section {
+  margin-bottom: 16px;
+}
+.pva-collapsible-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 9px 14px;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s;
+}
+.pva-collapsible-strip:hover {
+  border-color: var(--accent5);
+}
+.pva-collapsible-strip-title {
+  font-family: 'Outfit', sans-serif;
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--text);
+}
+.pva-collapsible-chevron {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  width: 14px;
+}
+.pva-collapsible-hint {
+  margin: 6px 2px 0;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+.pva-collapsible-content {
+  margin-top: 10px;
+}
+.pva-collapsible-content > .gara-zone,
+.pva-collapsible-content > .physics-panel:not(:first-child) {
+  margin-top: 14px;
+}
+.pva-summary-grid {
+  display: grid;
+  grid-template-columns: 90px repeat(3, 1fr);
+  gap: 4px 12px;
+  max-width: 420px;
+  margin: 8px 0 16px;
+  font-size: 0.74rem;
+}
+.pva-summary-header {
+  display: contents;
+}
+.pva-summary-header span {
+  color: var(--text-muted);
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.pva-summary-row {
+  display: contents;
+}
+.pva-summary-label {
+  color: var(--text-muted);
+}
+.pva-summary-val {
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--text);
+}
+.pva-micro-panel .physics-hint {
+  margin-top: 4px;
+}
+.pva-micro-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 14px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+.pva-micro-controls .btn.active {
+  background: var(--accent5);
+  color: #0b0f1a;
+  border-color: var(--accent5);
+}
+.pva-micro-active-label {
+  margin-left: 6px;
+  color: var(--accent5);
+  font-family: 'JetBrains Mono', monospace;
+}
+.pva-micro-table-wrap {
+  max-height: 420px;
+  overflow-y: auto;
+  margin-top: 14px;
+}
+.pva-micro-table-wrap table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--surface2);
+  z-index: 1;
 }

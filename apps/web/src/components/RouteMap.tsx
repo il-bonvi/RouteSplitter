@@ -29,7 +29,14 @@ interface RouteMapProps {
   windControl: MapWindControlData | null;
   windZones: WindZoneBoundary[];
   totalDistanceKm: number;
+  /** Distanze (km) delle microsezioni automatiche (griglia fine F3.3) — pallini leggeri e
+   * non interattivi lungo il tracciato. Vuoto/assente = nessun pallino (altre tab invariate).
+   * Cap silenzioso oltre MAX_MICRO_MARKERS: centinaia di marker Leaflet iniziano a pesare,
+   * meglio diradarli che appesantire la mappa. */
+  microBoundariesKm?: number[];
 }
+
+const MAX_MICRO_MARKERS = 400;
 
 function FitToRoute({ bounds }: { bounds: LatLngBoundsExpression }) {
   const map = useMap();
@@ -162,12 +169,19 @@ export function RouteMap({
   onRemoveBreakpoint,
   windControl,
   windZones,
-  totalDistanceKm
+  totalDistanceKm,
+  microBoundariesKm = []
 }: RouteMapProps) {
   const latLngs = useMemo<LatLngTuple[]>(() => points.map(p => [p.lat, p.lon]), [points]);
   const bounds = useMemo<LatLngBoundsExpression>(() => latLngs, [latLngs]);
   const segments = useMemo(() => buildColorSegments(points, smoothingRadiusMeters), [points, smoothingRadiusMeters]);
   const initialCenter = latLngs[0] ?? [45.0, 11.0];
+
+  const microMarkers = useMemo(() => {
+    if (microBoundariesKm.length === 0 || points.length < 2) return [];
+    const stride = Math.max(1, Math.ceil(microBoundariesKm.length / MAX_MICRO_MARKERS));
+    return microBoundariesKm.filter((_, i) => i % stride === 0).map(km => breakpointLatLng(points, km));
+  }, [microBoundariesKm, points]);
 
   if (latLngs.length < 2) return null;
 
@@ -216,6 +230,15 @@ export function RouteMap({
             pathOptions={{ color: '#fff', weight: 2, fillColor: '#fc5200', fillOpacity: 0.95 }}
           />
         )}
+        {microMarkers.map((pos, i) => (
+          <CircleMarker
+            key={i}
+            center={pos}
+            radius={3}
+            interactive={false}
+            pathOptions={{ color: '#a78bfa', weight: 1, fillColor: '#a78bfa', fillOpacity: 0.7 }}
+          />
+        ))}
         <ClickToAdd points={points} addMode={addMode} onAddBreakpoint={onAddBreakpoint} />
         <FitToRoute bounds={bounds} />
         <RecenterControl bounds={bounds} />

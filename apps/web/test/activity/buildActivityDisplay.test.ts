@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { buildActivityDisplay } from '../../src/activity/buildActivityDisplay.js';
+import { buildActivityDisplay, remapElevationFromRoute } from '../../src/activity/buildActivityDisplay.js';
+import { processRoute } from '@physics-core';
 import type { ActivityTrackPoint } from '../../src/activity/parseActivityFile.js';
 
 function trackPoint(latDeg: number, opts: Partial<ActivityTrackPoint> & { timeSec: number }): ActivityTrackPoint {
@@ -73,5 +74,41 @@ describe('buildActivityDisplay', () => {
     const display = buildActivityDisplay(points)!;
     expect(display.points[1]!.ele).toBe(100); // riempito con l'ultima quota nota
     expect(display.points[2]!.ele).toBe(120);
+  });
+});
+
+describe('remapElevationFromRoute', () => {
+  it('sostituisce la quota con quella interpolata dal percorso, alla stessa distanza percorsa', () => {
+    // Attività: 5 punti lungo un meridiano, quota rumorosa/piatta (device impreciso).
+    const activity: ActivityTrackPoint[] = [];
+    for (let i = 0; i < 5; i++) {
+      activity.push(trackPoint(45 + i * 0.001, { timeSec: i * 10, ele: 999, powerW: 200 }));
+    }
+    // Percorso pianificato: stesso tracciato geografico, ma con una quota pulita che sale
+    // linearmente da 100 a 500 m lungo l'intera distanza.
+    const routeRaw = Array.from({ length: 50 }, (_, i) => ({
+      lat: 45 + (i / 49) * 0.004,
+      lon: 11,
+      ele: 100 + (i / 49) * 400
+    }));
+    const routePoints = processRoute(routeRaw).points;
+
+    const remapped = remapElevationFromRoute(activity, routePoints);
+    expect(remapped).toHaveLength(5);
+    // Il primo punto è all'inizio del percorso (quota ~100), l'ultimo alla fine (quota ~500).
+    expect(remapped[0]!.ele).toBeCloseTo(100, 0);
+    expect(remapped[4]!.ele).toBeCloseTo(500, 0);
+    // Deve salire monotonamente, non essere la quota piatta/rumorosa originale (999).
+    for (let i = 1; i < remapped.length; i++) {
+      expect(remapped[i]!.ele!).toBeGreaterThan(remapped[i - 1]!.ele!);
+    }
+    // Non altera altri campi (potenza, tempo).
+    expect(remapped[2]!.powerW).toBe(200);
+    expect(remapped[2]!.timeSec).toBe(20);
+  });
+
+  it('con meno di 2 punti validi o percorso troppo corto, ritorna i punti invariati', () => {
+    const activity: ActivityTrackPoint[] = [trackPoint(45, { timeSec: 0 })];
+    expect(remapElevationFromRoute(activity, processRoute([{ lat: 45, lon: 11, ele: 100 }, { lat: 45.1, lon: 11, ele: 200 }]).points)).toBe(activity);
   });
 });

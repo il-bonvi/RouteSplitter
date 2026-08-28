@@ -403,13 +403,16 @@ export function ElevationChart({
     const bisectDist = d3.bisector<ChartDatum, number>(d => d.dist).left;
 
     function updateHover(clientX: number, clientY: number, svgX: number) {
-      const dist = xScale.invert(svgX);
+      // Clampato a [d0,d1]: senza questo, un mouse/touch vicino al bordo destro (o sinistro)
+      // del grafico può produrre un dist leggermente fuori range (rounding, o zoom con brush)
+      // e l'hover restava "bloccato" sull'ultima posizione valida invece di seguire il
+      // puntatore fino al bordo.
+      const dist = Math.max(d0, Math.min(d1, xScale.invert(svgX)));
       const idx = bisectDist(fullData, dist);
       const a = fullData[Math.max(0, idx - 1)];
       const b = fullData[Math.min(fullData.length - 1, idx)];
       if (!a || !b) return;
       const point = Math.abs(a.dist - dist) < Math.abs(b.dist - dist) ? a : b;
-      if (point.dist < d0 || point.dist > d1) return;
 
       const cx = xScale(point.dist);
       const cy = yScale(point.ele);

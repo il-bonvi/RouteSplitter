@@ -1,4 +1,4 @@
-import type { Breakpoint, CalcMode, SectionPlan, WindZoneBoundary } from '@shared-schema';
+import type { Breakpoint, CalcMode, SectionPlan, WindZoneBoundary, WindTimeSample } from '@shared-schema';
 
 export interface SectionsExportPayload {
   type: 'routesplitter-sections';
@@ -10,7 +10,16 @@ export interface SectionsExportPayload {
   points: Array<{ distKm: number; fixed: Breakpoint['fixed']; sectionLabel: string | null; speed: number | null; power: number | null }>;
   calcMode: CalcMode;
   /** Zone vento — campo aggiunto dopo il formato originale; assente nei file esportati prima. */
-  windZones?: Array<{ distKm: number; fixed: WindZoneBoundary['fixed']; speedKmh: number | null; directionDeg: number | null }>;
+  windZones?: Array<{
+    distKm: number;
+    fixed: WindZoneBoundary['fixed'];
+    speedKmh: number | null;
+    directionDeg: number | null;
+    /** Campo aggiunto dopo il formato originale; assente nei file esportati prima. */
+    timeSamples?: Array<{ minuteOfDay: number; speedKmh: number; directionDeg: number }>;
+  }>;
+  /** Campo aggiunto dopo il formato originale; assente nei file esportati prima. */
+  plannedStartTime?: string | null;
 }
 
 /** Stesso formato del prototipo originale (chiavi `speed`/`power`, non `speedKmh`/`powerWatts`). */
@@ -34,8 +43,10 @@ export function buildSectionsExportPayload(routeName: string, routeDistanceKm: n
       distKm: z.distKm,
       fixed: z.fixed,
       speedKmh: z.speedKmh,
-      directionDeg: z.directionDeg
-    }))
+      directionDeg: z.directionDeg,
+      timeSamples: z.timeSamples.map(t => ({ minuteOfDay: t.minuteOfDay, speedKmh: t.speedKmh, directionDeg: t.directionDeg }))
+    })),
+    plannedStartTime: plan.plannedStartTime
   };
 }
 
@@ -47,6 +58,28 @@ export interface ParsedSectionsImport {
   routeDistanceKm: number | null;
   /** null = il file non conteneva zone vento (non tocca quelle esistenti); [] = vento esplicitamente azzerato. */
   windZones: WindZoneBoundary[] | null;
+  /** null = il file non conteneva un'ora di partenza (non tocca quella esistente). */
+  plannedStartTime: string | null;
+}
+
+function parseTimeSamplesImport(raw: unknown): WindTimeSample[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((entry, i) => {
+      const e = entry as Record<string, unknown>;
+      const minuteOfDay = Number(e.minuteOfDay);
+      const speedKmh = Number(e.speedKmh);
+      const directionDeg = Number(e.directionDeg);
+      if (!Number.isFinite(minuteOfDay) || !Number.isFinite(speedKmh) || !Number.isFinite(directionDeg)) return null;
+      return {
+        id: `wts-import-${i}-${Date.now().toString(36)}`,
+        minuteOfDay: Math.min(Math.max(0, minuteOfDay), 1439),
+        speedKmh: Math.max(0, speedKmh),
+        directionDeg: ((directionDeg % 360) + 360) % 360
+      };
+    })
+    .filter((s): s is WindTimeSample => s !== null)
+    .sort((a, b) => a.minuteOfDay - b.minuteOfDay);
 }
 
 function parseWindZonesImport(raw: unknown, currentDistanceKm: number): WindZoneBoundary[] | null {
@@ -59,7 +92,8 @@ function parseWindZonesImport(raw: unknown, currentDistanceKm: number): WindZone
       const fixed: WindZoneBoundary['fixed'] = fixedRaw === 'start' || fixedRaw === 'finish' ? fixedRaw : false;
       const speedKmh = e.speedKmh != null && Number.isFinite(Number(e.speedKmh)) ? Number(e.speedKmh) : null;
       const directionDeg = e.directionDeg != null && Number.isFinite(Number(e.directionDeg)) ? Number(e.directionDeg) : null;
-      return { id: `wz-import-${i}-${Date.now().toString(36)}`, distKm, fixed, speedKmh, directionDeg };
+      const timeSamples = parseTimeSamplesImport(e.timeSamples);
+      return { id: `wz-import-${i}-${Date.now().toString(36)}`, distKm, fixed, speedKmh, directionDeg, timeSamples };
     })
     .sort((a, b) => a.distKm - b.distKm);
   if (zones.length === 0) return [];
@@ -148,6 +182,7 @@ export function parseSectionsImport(jsonText: string, currentDistanceKm: number,
     defaultSpeedKmh: typeof p.defaultSpeed === 'number' ? p.defaultSpeed : null,
     routeName: typeof p.routeName === 'string' && p.routeName.trim() ? p.routeName.trim() : null,
     routeDistanceKm: typeof p.routeDistanceKm === 'number' ? p.routeDistanceKm : null,
-    windZones: parseWindZonesImport(p.windZones, currentDistanceKm)
+    windZones: parseWindZonesImport(p.windZones, currentDistanceKm),
+    plannedStartTime: typeof p.plannedStartTime === 'string' ? p.plannedStartTime : null
   };
 }

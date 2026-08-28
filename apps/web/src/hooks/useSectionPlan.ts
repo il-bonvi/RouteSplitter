@@ -205,8 +205,8 @@ export function useSectionPlan(routeId: string | null, distanceKm: number) {
       if (plan.windZones.length < 2) {
         await save({
           windZones: [
-            { id: generateWindZoneId(), distKm: 0, fixed: 'start', speedKmh: null, directionDeg: null },
-            { id: generateWindZoneId(), distKm: distanceKm, fixed: 'finish', speedKmh: 0, directionDeg: 0 }
+            { id: generateWindZoneId(), distKm: 0, fixed: 'start', speedKmh: null, directionDeg: null, timeSamples: [] },
+            { id: generateWindZoneId(), distKm: distanceKm, fixed: 'finish', speedKmh: 0, directionDeg: 0, timeSamples: [] }
           ]
         });
         return;
@@ -226,7 +226,8 @@ export function useSectionPlan(routeId: string | null, distanceKm: number) {
         distKm: clamped,
         fixed: false,
         speedKmh: covering.speedKmh ?? 0,
-        directionDeg: covering.directionDeg ?? 0
+        directionDeg: covering.directionDeg ?? 0,
+        timeSamples: []
       };
       const merged = [...plan.windZones, newZone].sort((a, b) => a.distKm - b.distKm);
       await save({ windZones: merged });
@@ -244,9 +245,35 @@ export function useSectionPlan(routeId: string | null, distanceKm: number) {
   );
 
   const updateWindZone = useCallback(
-    async (id: string, patch: Partial<Pick<WindZoneBoundary, 'speedKmh' | 'directionDeg'>>) => {
+    async (id: string, patch: Partial<Pick<WindZoneBoundary, 'speedKmh' | 'directionDeg' | 'timeSamples'>>) => {
       if (!plan) return;
       const updated = plan.windZones.map(z => (z.id === id ? { ...z, ...patch } : z));
+      await save({ windZones: updated });
+    },
+    [plan, save]
+  );
+
+  /** Aggiunge un campione orario (vedi WindTimeSample) alla zona `zoneId`, ordinato per ora. */
+  const addWindTimeSample = useCallback(
+    async (zoneId: string, minuteOfDay: number, speedKmh: number, directionDeg: number) => {
+      if (!plan) return;
+      const updated = plan.windZones.map(z => {
+        if (z.id !== zoneId) return z;
+        const sample = { id: generateWindZoneId(), minuteOfDay, speedKmh, directionDeg };
+        const merged = [...z.timeSamples, sample].sort((a, b) => a.minuteOfDay - b.minuteOfDay);
+        return { ...z, timeSamples: merged };
+      });
+      await save({ windZones: updated });
+    },
+    [plan, save]
+  );
+
+  const removeWindTimeSample = useCallback(
+    async (zoneId: string, sampleId: string) => {
+      if (!plan) return;
+      const updated = plan.windZones.map(z =>
+        z.id === zoneId ? { ...z, timeSamples: z.timeSamples.filter(s => s.id !== sampleId) } : z
+      );
       await save({ windZones: updated });
     },
     [plan, save]
@@ -258,11 +285,25 @@ export function useSectionPlan(routeId: string | null, distanceKm: number) {
     const last = plan.windZones[plan.windZones.length - 1];
     await save({
       windZones: [
-        { id: generateWindZoneId(), distKm: 0, fixed: 'start', speedKmh: null, directionDeg: null },
-        { id: generateWindZoneId(), distKm: distanceKm, fixed: 'finish', speedKmh: last?.speedKmh ?? 0, directionDeg: last?.directionDeg ?? 0 }
+        { id: generateWindZoneId(), distKm: 0, fixed: 'start', speedKmh: null, directionDeg: null, timeSamples: [] },
+        {
+          id: generateWindZoneId(),
+          distKm: distanceKm,
+          fixed: 'finish',
+          speedKmh: last?.speedKmh ?? 0,
+          directionDeg: last?.directionDeg ?? 0,
+          timeSamples: []
+        }
       ]
     });
   }, [plan, save, distanceKm]);
+
+  const setPlannedStartTime = useCallback(
+    async (plannedStartTime: string | null) => {
+      await save({ plannedStartTime });
+    },
+    [save]
+  );
 
   /** Azzera del tutto le zone vento (equivalente a "vento non configurato"). */
   const clearWindZones = useCallback(async () => {
@@ -286,7 +327,10 @@ export function useSectionPlan(routeId: string | null, distanceKm: number) {
     addWindZoneBoundary,
     removeWindZoneBoundary,
     updateWindZone,
+    addWindTimeSample,
+    removeWindTimeSample,
     resetWindZones,
-    clearWindZones
+    clearWindZones,
+    setPlannedStartTime
   };
 }

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   estimateCdaFromSamples,
+  estimateWindFromSamples,
   bucketSamplesByTier,
   bucketSamplesByDistance,
   bucketSamplesByBreakpoints,
@@ -241,5 +242,61 @@ describe('bucketSamplesByBreakpoints', () => {
     const buckets = bucketSamplesByBreakpoints(samples, [5]);
     const total = buckets.reduce((sum, b) => sum + b.samples.length, 0);
     expect(total).toBe(1);
+  });
+});
+
+describe('estimateWindFromSamples', () => {
+  /** Costruisce un campione "perfetto" con un vento vero noto (CdA noto, fisso). */
+  function syntheticWindSample(speedMS: number, gradientPct: number, trueWindKmh: number): CdaSample {
+    const params = { ...baseParams, windKmh: trueWindKmh };
+    const wheelPower = wheelPowerAtSpeed(speedMS, gradientPct, params);
+    const powerW = wheelPower / (1 - params.drivetrainLossPct / 100);
+    return { speedMS, powerW, gradientPct };
+  }
+
+  function syntheticWindRide(trueWindKmh: number, n = 40): CdaSample[] {
+    const samples: CdaSample[] = [];
+    for (let i = 0; i < n; i++) {
+      const speedMS = 6 + (i % 7);
+      const gradientPct = -3 + (i % 7);
+      samples.push(syntheticWindSample(speedMS, gradientPct, trueWindKmh));
+    }
+    return samples;
+  }
+
+  it('ritrova un vento in testa noto da campioni sintetici', () => {
+    const samples = syntheticWindRide(15);
+    const result = estimateWindFromSamples(samples, baseParams);
+    expect(result).not.toBeNull();
+    expect(result!.windKmh).toBeCloseTo(15, 0);
+    expect(result!.usedSamples).toBeGreaterThanOrEqual(20);
+  });
+
+  it('ritrova un vento in coda noto (negativo) da campioni sintetici', () => {
+    const samples = syntheticWindRide(-10);
+    const result = estimateWindFromSamples(samples, baseParams);
+    expect(result).not.toBeNull();
+    expect(result!.windKmh).toBeCloseTo(-10, 0);
+  });
+
+  it('vento nullo → stima vicina a zero', () => {
+    const samples = syntheticWindRide(0);
+    const result = estimateWindFromSamples(samples, baseParams);
+    expect(result).not.toBeNull();
+    expect(Math.abs(result!.windKmh)).toBeLessThan(1);
+  });
+
+  it('null con troppo pochi campioni validi', () => {
+    const samples = syntheticWindRide(10, 5);
+    expect(estimateWindFromSamples(samples, baseParams)).toBeNull();
+  });
+
+  it('scarta campioni fermi/senza potenza', () => {
+    const samples = syntheticWindRide(10);
+    samples.push({ speedMS: 0.1, powerW: 5, gradientPct: 0 });
+    const result = estimateWindFromSamples(samples, baseParams);
+    expect(result).not.toBeNull();
+    expect(result!.totalSamples).toBe(samples.length);
+    expect(result!.usedSamples).toBeLessThan(samples.length);
   });
 });

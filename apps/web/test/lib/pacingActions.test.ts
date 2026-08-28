@@ -44,8 +44,8 @@ describe('breakpointsToSegments', () => {
     // Vento costante 20 km/h da nord (direction 0°) su tutto il percorso -> in testa puro
     // marciando verso nord (bearing ~0°): effettivo = +20.
     const windZones: WindZoneBoundary[] = [
-      { id: 'w-start', distKm: 0, fixed: 'start', speedKmh: null, directionDeg: null },
-      { id: 'w-finish', distKm: 20, fixed: 'finish', speedKmh: 20, directionDeg: 0 }
+      { id: 'w-start', distKm: 0, fixed: 'start', speedKmh: null, directionDeg: null , timeSamples: [] },
+      { id: 'w-finish', distKm: 20, fixed: 'finish', speedKmh: 20, directionDeg: 0 , timeSamples: [] }
     ];
     const segs = breakpointsToSegments(breakpoints, points, windZones);
     expect(segs[0]!.windKmh).toBeCloseTo(20, 0);
@@ -67,9 +67,9 @@ describe('buildFineGrid', () => {
     const points = flatClimb(10, 0);
     // Prima metà vento in coda (-15), seconda metà in testa (+15): due zone, cambio a 5km.
     const windZones: WindZoneBoundary[] = [
-      { id: 'w-start', distKm: 0, fixed: 'start', speedKmh: null, directionDeg: null },
-      { id: 'w-mid', distKm: 5, fixed: false, speedKmh: 15, directionDeg: 180 }, // in coda marciando verso nord
-      { id: 'w-finish', distKm: 10, fixed: 'finish', speedKmh: 15, directionDeg: 0 } // in testa
+      { id: 'w-start', distKm: 0, fixed: 'start', speedKmh: null, directionDeg: null , timeSamples: [] },
+      { id: 'w-mid', distKm: 5, fixed: false, speedKmh: 15, directionDeg: 180 , timeSamples: [] }, // in coda marciando verso nord
+      { id: 'w-finish', distKm: 10, fixed: 'finish', speedKmh: 15, directionDeg: 0 , timeSamples: [] } // in testa
     ];
     const grid = buildFineGrid(10, 1, points, windZones);
     const early = grid.find(s => s.d1Km <= 5)!;
