@@ -989,6 +989,14 @@ body {
   accent-color: #fc5200;
   width: 90px;
 }
+.stream-smoothing-input {
+  width: 56px;
+  padding: 2px 6px;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  font-family: 'Inter', sans-serif;
+}
 .smoothing-value {
   min-width: 40px;
 }
@@ -1494,9 +1502,35 @@ body {
 .elevation-power-legend {
   margin-top: 2px;
 }
+.elevation-speed-legend {
+  margin-top: 2px;
+}
 .elevation-wind-legend {
   margin-top: 2px;
   padding-bottom: 4px;
+}
+.stream-toggles {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+}
+.stream-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 0.8rem;
+}
+.stream-toggle input[type='checkbox'] {
+  cursor: pointer;
+  margin: 0;
+}
+.stream-toggle i {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
 }
 
 /* Canvas particelle vento animate sulla planimetria (WindFlowLayer) */

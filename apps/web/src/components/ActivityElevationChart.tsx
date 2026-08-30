@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import * as d3 from 'd3';
 import {
   smoothByDistance,
+  smoothByTime,
   lttb,
   computeGainLossBetween,
   getInterpolatedPoint,
@@ -15,6 +16,7 @@ import type { WindZoneBoundary } from '@shared-schema';
 import { getGradientColor } from '../lib/gradientColor.js';
 import { headwindColor, headwindOpacity } from '../lib/windDisplay.js';
 import { SmoothingControl } from './SmoothingControl.js';
+import { NumberField } from './NumberField.js';
 import type { ActivityDisplayPoint } from '../activity/buildActivityDisplay.js';
 
 interface HoverInfo {
@@ -44,6 +46,17 @@ interface ActivityElevationChartProps {
    * piano" a "cosa mostrano i dati". Opzionale — assente/vuoto = comportamento identico a
    * prima (nessuna riga aggiuntiva), così F3.1 non cambia. */
   plannedPowerSeries?: Array<{ distKm: number; powerWatts: number }>;
+  /** Stesso principio di plannedPowerSeries, ma per la velocità pianificata (asse destro
+   * dedicato, colore diverso dalla potenza). Opzionale — assente/vuoto = nessuna riga. */
+  plannedSpeedSeries?: Array<{ distKm: number; speedKmh: number }>;
+  /** Testo della legenda/checkbox per la linea tratteggiata di potenza — default "pianificata".
+   * Permette a un chiamante (es. "Verifica dati" a livello di microsezione in Tab 3) di
+   * rietichettarla come "verificata (da potenza reale)" quando la serie passata in
+   * plannedPowerSeries non è più il piano ma un valore derivato dalla potenza reale — il
+   * grafico non deve mai mostrare un'etichetta che non descrive più cosa sta disegnando. */
+  plannedPowerLabel?: string;
+  /** Stesso principio di plannedPowerLabel, per la velocità. */
+  plannedSpeedLabel?: string;
   /** Distanze (km) delle microsezioni automatiche (griglia fine F3.3), disegnate come tacche
    * verticali leggere. Vuoto/assente = nessuna tacca (comportamento invariato per F3.1). */
   microBoundariesKm?: number[];
@@ -57,9 +70,20 @@ interface ChartDatum extends ChartPoint {
   speedKmh: number | null;
 }
 
-// Margine destro più largo dell'originale (30 -> 46): unico spazio in più necessario per
-// l'asse della potenza, l'aggiunta deliberata rispetto a ElevationChart (vedi sotto).
-const MARGIN = { top: 20, right: 46, bottom: 40, left: 55 };
+// Margine destro ulteriormente allargato (46 -> 82): deve ospitare DUE assi destri quando sia
+// potenza che velocità sono visibili insieme (F3.4/streams), non solo quello della potenza.
+const MARGIN = { top: 20, right: 82, bottom: 40, left: 55 };
+
+// Colori degli stream dati (assi, linee, legenda, checkbox) — un'unica definizione condivisa.
+// Richiesta precisa: la potenza reale/pianificata avevano due tinte ben DIVERSE (arancio/blu)
+// — quello il problema, non il contrario — mentre velocità reale/pianificata avevano già due
+// tinte SIMILI (due verdi) ed erano corrette così. Fix: potenza ora due tinte della STESSA
+// famiglia (blu scuro/chiaro, come lo era già la velocità), arancio sostituito su richiesta;
+// velocità invariata rispetto a prima di questa correzione.
+const COLOR_POWER_REAL = '#4338ca';
+const COLOR_POWER_PLANNED = '#7c9cff';
+const COLOR_SPEED_REAL = '#10b981';
+const COLOR_SPEED_PLANNED = '#6ee7b7';
 const TOTAL_W = 900;
 const TOTAL_H = 290;
 const W = TOTAL_W - MARGIN.left - MARGIN.right;
@@ -90,13 +114,48 @@ export function ActivityElevationChart({
   addMode,
   onAddBreakpoint,
   onRemoveBreakpoint,
-  windZones = [],
-  plannedPowerSeries = [],
-  microBoundariesKm = []
+  windZones,
+  plannedPowerSeries,
+  plannedSpeedSeries,
+  plannedPowerLabel = 'pianificata',
+  plannedSpeedLabel = 'pianificata',
+  microBoundariesKm
 }: ActivityElevationChartProps) {
+  // BUG REALE TROVATO (causa vera dell'hover che sparisce da fermo, mai davvero chiusa nei
+  // giri precedenti): un default-parameter tipo `windZones = []` nella destrutturazione crea
+  // un array NUOVO a ogni singola esecuzione della funzione componente quando il chiamante
+  // OMETTE la prop — e infatti il grafico "confronto con uscita reale" non passava affatto
+  // `microBoundariesKm`. Essendo questi array nel dependency array dell'effetto D3 qui sotto
+  // (quello che fa `container.innerHTML = ''` e ridisegna tutto), una nuova identità ad ogni
+  // render — cioè ad OGNI movimento del mouse, dato che l'hover aggiorna lo stato del
+  // genitore per sincronizzare il marker sulla mappa — smontava e ricostruiva l'intero
+  // grafico in continuazione: l'hover restava sempre "appena resettato e invisibile" un
+  // istante dopo essere apparso, indistinguibile da "sparisce quando il mouse è fermo".
+  // Fix a livello di COMPONENTE (non di singolo chiamante, che è come si era già rotto una
+  // volta): un riferimento stabile via useRef, mai ricreato, usato solo se il chiamante non
+  // fornisce l'array. Protegge anche da futuri call site che dimenticassero di passarli.
+  const stableEmptyArrayRef = useRef<never[]>([]);
+  const safeWindZones = windZones ?? stableEmptyArrayRef.current;
+  const safePlannedPowerSeries = plannedPowerSeries ?? stableEmptyArrayRef.current;
+  const safePlannedSpeedSeries = plannedSpeedSeries ?? stableEmptyArrayRef.current;
+  const safeMicroBoundariesKm = microBoundariesKm ?? stableEmptyArrayRef.current;
   const containerRef = useRef<HTMLDivElement>(null);
   const [zoomDomain, setZoomDomain] = useState<[number, number] | null>(null);
   const [selectionStats, setSelectionStats] = useState<SelectionStats | null>(null);
+  // Le 4 linee (potenza/velocità × reale/pianificata) sono TUTTE indipendentemente
+  // disattivabili — non due gruppi ("Potenza"/"Velocità") come nella prima versione: un
+  // gruppo unico non permetteva di nascondere ad es. solo "velocità pianificata" tenendo
+  // "velocità reale" visibile. Tutte visibili di default (comportamento storico).
+  const [showPowerReal, setShowPowerReal] = useState(true);
+  const [showPowerPlanned, setShowPowerPlanned] = useState(true);
+  const [showSpeedReal, setShowSpeedReal] = useState(true);
+  const [showSpeedPlanned, setShowSpeedPlanned] = useState(true);
+  // Media mobile aggiuntiva, in SECONDI, applicata solo a potenza e velocità REALI — del
+  // tutto indipendente dallo smoothing a metri qui sopra (che resta invariato, tocca solo
+  // elevazione/pendenza/potenza a distanza fissa) e dalle serie pianificate (mai toccate).
+  // Default 0 = nessun cambiamento rispetto a oggi: dato grezzo dal file FIT finché l'utente
+  // non scrive un valore nella casella.
+  const [streamSmoothingSec, setStreamSmoothingSec] = useState(0);
 
   const onHoverPointRef = useRef(onHoverPoint);
   const onAddBreakpointRef = useRef(onAddBreakpoint);
@@ -127,34 +186,49 @@ export function ActivityElevationChart({
       return lastPower;
     });
     const powerSmooth = smoothByDistance(powerFilled, distances, smoothingRadiusMeters);
+
+    let lastSpeed = sourcePoints.find(p => p.speedKmh != null)?.speedKmh ?? 0;
+    const speedFilled = sourcePoints.map(p => {
+      if (p.speedKmh != null) lastSpeed = p.speedKmh;
+      return lastSpeed;
+    });
+
+    // Secondo passaggio, indipendente dai due sopra: media mobile in secondi (non metri),
+    // solo su potenza e velocità reali — vedi commento sullo state `streamSmoothingSec` più
+    // sopra. A 0 non altera nulla (stesso identico dato grezzo di prima di questa modifica).
+    const timesSec = sourcePoints.map(p => p.timeSec);
+    const powerStreamSmooth = streamSmoothingSec > 0 ? smoothByTime(powerSmooth, timesSec, streamSmoothingSec) : powerSmooth;
+    const speedStreamSmooth = streamSmoothingSec > 0 ? smoothByTime(speedFilled, timesSec, streamSmoothingSec) : speedFilled;
+
     return sourcePoints.map((p, i) => ({
       dist: p.dist / 1000,
       ele: eleSmooth[i]!,
       gradient: gradSmooth[i]!,
       lat: p.lat,
       lon: p.lon,
-      powerW: p.powerW != null ? powerSmooth[i]! : null,
-      speedKmh: p.speedKmh
+      powerW: p.powerW != null ? powerStreamSmooth[i]! : null,
+      speedKmh: p.speedKmh != null ? speedStreamSmooth[i]! : null
     }));
-  }, [points, smoothingRadiusMeters]);
+  }, [points, smoothingRadiusMeters, streamSmoothingSec]);
 
   const hasPower = useMemo(() => fullData.some(d => d.powerW != null), [fullData]);
+  const hasSpeed = useMemo(() => fullData.some(d => d.speedKmh != null), [fullData]);
 
   const windMaxAbs = useMemo(() => {
-    if (windZones.length < 2 || points.length < 2) return 0;
+    if (safeWindZones.length < 2 || points.length < 2) return 0;
     const totalKm = points[points.length - 1]!.dist / 1000;
     if (totalKm <= 0) return 0;
     let max = 0;
     const coarseSamples = 150;
     for (let i = 0; i <= coarseSamples; i++) {
       const km = (totalKm * i) / coarseSamples;
-      const wind = windAtDistKm(windZones, km);
+      const wind = windAtDistKm(safeWindZones, km);
       if (!wind) continue;
       const bearing = routeBearingAtDistKm(points, km);
       max = Math.max(max, Math.abs(effectiveHeadwindKmh(wind.speedKmh, wind.directionDeg, bearing)));
     }
     return Math.max(max, 3);
-  }, [points, windZones]);
+  }, [points, safeWindZones]);
 
   const pointsKey = points.length > 0 ? `${points[0]!.dist}-${points[points.length - 1]!.dist}-${points.length}` : '';
   useEffect(() => {
@@ -194,11 +268,27 @@ export function ActivityElevationChart({
     const yScale = d3.scaleLinear().domain([yMin, yMax]).range([H, 0]);
 
     const powerValues = visibleData.map(d => d.powerW).filter((w): w is number => w != null);
-    const plannedPowerValues = plannedPowerSeries.filter(p => p.distKm >= d0 && p.distKm <= d1).map(p => p.powerWatts);
+    const plannedPowerValues = safePlannedPowerSeries.filter(p => p.distKm >= d0 && p.distKm <= d1).map(p => p.powerWatts);
+    const hasPlannedPower = safePlannedPowerSeries.length > 1;
     const allPowerValues = [...powerValues, ...plannedPowerValues];
     const powerMax = allPowerValues.length > 0 ? Math.max(...allPowerValues) * 1.15 : 0;
     const yScalePower = d3.scaleLinear().domain([0, powerMax || 1]).range([H, 0]);
-    const showPowerAxis = hasPower || plannedPowerSeries.length > 1;
+    // L'asse compare se ALMENO UNA delle due linee di potenza è attualmente sia disponibile
+    // che attivata dal relativo toggle — non più un unico interruttore "Potenza" per entrambe.
+    const powerAxisVisible = (showPowerReal && hasPower) || (showPowerPlanned && hasPlannedPower);
+
+    const speedValues = visibleData.map(d => d.speedKmh).filter((s): s is number => s != null);
+    const plannedSpeedValues = safePlannedSpeedSeries.filter(p => p.distKm >= d0 && p.distKm <= d1).map(p => p.speedKmh);
+    const hasPlannedSpeed = safePlannedSpeedSeries.length > 1;
+    const allSpeedValues = [...speedValues, ...plannedSpeedValues];
+    const speedMax = allSpeedValues.length > 0 ? Math.max(...allSpeedValues) * 1.15 : 0;
+    const yScaleSpeed = d3.scaleLinear().domain([0, speedMax || 1]).range([H, 0]);
+    const speedAxisVisible = (showSpeedReal && hasSpeed) || (showSpeedPlanned && hasPlannedSpeed);
+    // Se entrambi gli assi sono attivi, la potenza resta sulla posizione "interna" (subito
+    // dopo il grafico) e la velocità su quella "esterna" (ulteriori ~34px): ordine arbitrario
+    // ma stabile, altrimenti gli assi "salterebbero" di posizione ogni volta che l'utente
+    // spegne/riaccende uno dei due toggle.
+    const speedAxisOffset = powerAxisVisible ? 34 : 0;
 
     const svg = d3
       .select(container)
@@ -224,13 +314,21 @@ export function ActivityElevationChart({
       .selectAll('text')
       .style('font-size', '10px')
       .style('fill', '#6b7280');
-    if (showPowerAxis) {
+    if (powerAxisVisible) {
       g.append('g')
         .attr('transform', `translate(${W},0)`)
         .call(d3.axisRight(yScalePower).ticks(6).tickFormat(d => `${d} W`))
         .selectAll('text')
         .style('font-size', '10px')
-        .style('fill', '#fc5200');
+        .style('fill', COLOR_POWER_REAL);
+    }
+    if (speedAxisVisible) {
+      g.append('g')
+        .attr('transform', `translate(${W + speedAxisOffset},0)`)
+        .call(d3.axisRight(yScaleSpeed).ticks(6).tickFormat(d => `${d} km/h`))
+        .selectAll('text')
+        .style('font-size', '10px')
+        .style('fill', COLOR_SPEED_REAL);
     }
 
     g.append('g')
@@ -241,7 +339,7 @@ export function ActivityElevationChart({
 
     g.selectAll('.domain').style('stroke', '#d1d5db');
 
-    if (microBoundariesKm.length > 0) {
+    if (safeMicroBoundariesKm.length > 0) {
       // Tacche sottili non interattive alle distanze delle microsezioni (griglia automatica
       // F3.3) — deliberatamente senza numeri/cerchi come i breakpoint veri (potrebbero
       // essere centinaia): solo un riferimento visivo di dove cade ogni bin.
@@ -249,7 +347,7 @@ export function ActivityElevationChart({
         .attr('class', 'micro-boundaries')
         .attr('pointer-events', 'none')
         .selectAll('line')
-        .data(microBoundariesKm.filter(km => km >= d0 && km <= d1))
+        .data(safeMicroBoundariesKm.filter(km => km >= d0 && km <= d1))
         .join('line')
         .attr('x1', km => xScale(km))
         .attr('x2', km => xScale(km))
@@ -261,7 +359,7 @@ export function ActivityElevationChart({
         .attr('opacity', 0.55);
     }
 
-    if (windZones.length >= 2 && windMaxAbs > 0) {
+    if (safeWindZones.length >= 2 && windMaxAbs > 0) {
       const bandH = 7;
       const bandY = -bandH - 5;
       const bandSamples = 110;
@@ -270,7 +368,7 @@ export function ActivityElevationChart({
       for (let i = 0; i < bandSamples; i++) {
         const kmStart = d0 + i * stepKm;
         const kmMid = kmStart + stepKm / 2;
-        const wind = windAtDistKm(windZones, kmMid);
+        const wind = windAtDistKm(safeWindZones, kmMid);
         const headwindKmh = wind ? effectiveHeadwindKmh(wind.speedKmh, wind.directionDeg, routeBearingAtDistKm(points, kmMid)) : 0;
         const x = xScale(kmStart);
         const wpx = Math.max(1, xScale(kmStart + stepKm) - x);
@@ -309,7 +407,7 @@ export function ActivityElevationChart({
       chartG.append('line').attr('x1', x1).attr('y1', y1).attr('x2', x2).attr('y2', y2).attr('stroke', color).attr('stroke-width', 1.5);
     }
 
-    if (hasPower) {
+    if (hasPower && showPowerReal) {
       const powerLine = d3
         .line<ChartDatum>()
         .defined(d => d.powerW != null)
@@ -320,29 +418,65 @@ export function ActivityElevationChart({
         .datum(displayData)
         .attr('clip-path', 'url(#activity-elev-clip)')
         .attr('fill', 'none')
-        .attr('stroke', '#fc5200')
+        .attr('stroke', COLOR_POWER_REAL)
         .attr('stroke-width', 1.6)
         .attr('opacity', 0.9)
         .attr('pointer-events', 'none')
         .attr('d', powerLine);
     }
 
-    if (plannedPowerSeries.length > 1) {
+    if (hasPlannedPower && showPowerPlanned) {
       const plannedLine = d3
         .line<{ distKm: number; powerWatts: number }>()
         .x(d => xScale(d.distKm))
         .y(d => yScalePower(d.powerWatts))
         .curve(d3.curveMonotoneX);
       g.append('path')
-        .datum(plannedPowerSeries)
+        .datum(safePlannedPowerSeries)
         .attr('clip-path', 'url(#activity-elev-clip)')
         .attr('fill', 'none')
-        .attr('stroke', '#7c9cff')
+        .attr('stroke', COLOR_POWER_PLANNED)
         .attr('stroke-width', 1.8)
         .attr('stroke-dasharray', '6,4')
         .attr('opacity', 0.95)
         .attr('pointer-events', 'none')
         .attr('d', plannedLine);
+    }
+
+    if (hasSpeed && showSpeedReal) {
+      const speedLine = d3
+        .line<ChartDatum>()
+        .defined(d => d.speedKmh != null)
+        .x(d => xScale(d.dist))
+        .y(d => yScaleSpeed(d.speedKmh!))
+        .curve(d3.curveMonotoneX);
+      g.append('path')
+        .datum(displayData)
+        .attr('clip-path', 'url(#activity-elev-clip)')
+        .attr('fill', 'none')
+        .attr('stroke', COLOR_SPEED_REAL)
+        .attr('stroke-width', 1.6)
+        .attr('opacity', 0.9)
+        .attr('pointer-events', 'none')
+        .attr('d', speedLine);
+    }
+
+    if (hasPlannedSpeed && showSpeedPlanned) {
+      const plannedSpeedLine = d3
+        .line<{ distKm: number; speedKmh: number }>()
+        .x(d => xScale(d.distKm))
+        .y(d => yScaleSpeed(d.speedKmh))
+        .curve(d3.curveMonotoneX);
+      g.append('path')
+        .datum(safePlannedSpeedSeries)
+        .attr('clip-path', 'url(#activity-elev-clip)')
+        .attr('fill', 'none')
+        .attr('stroke', COLOR_SPEED_PLANNED)
+        .attr('stroke-width', 1.8)
+        .attr('stroke-dasharray', '6,4')
+        .attr('opacity', 0.95)
+        .attr('pointer-events', 'none')
+        .attr('d', plannedSpeedLine);
     }
 
     if (isZoomed) {
@@ -405,8 +539,22 @@ export function ActivityElevationChart({
       .attr('stroke', '#555')
       .attr('stroke-width', 1)
       .attr('stroke-dasharray', '4,3')
-      .attr('opacity', 0);
-    const hoverDot = g.append('circle').attr('r', 5).attr('fill', '#fc5200').attr('stroke', '#fff').attr('stroke-width', 2).attr('opacity', 0);
+      .attr('opacity', 0)
+      // Stesso bug di chartG più sopra, mai corretto QUI: un cerchio pieno (fill non
+      // trasparente al puntatore per default SVG) disegnato esattamente sotto il cursore —
+      // per costruzione, è dove si trova il mouse — può "rubare" l'hit-test del browser a un
+      // puntatore fermo, anche se l'overlay del brush è sopra nell'ordine di disegno. Risultato
+      // visibile: l'hover sembra sparire solo quando il mouse resta fermo (mai mentre si
+      // muove). Esplicitamente non interattivo, come già fatto per l'area colorata e le linee.
+      .attr('pointer-events', 'none');
+    const hoverDot = g
+      .append('circle')
+      .attr('r', 5)
+      .attr('fill', '#fc5200')
+      .attr('stroke', '#fff')
+      .attr('stroke-width', 2)
+      .attr('opacity', 0)
+      .attr('pointer-events', 'none');
 
     const bisectDist = d3.bisector<ChartDatum, number>(d => d.dist).left;
 
@@ -509,9 +657,30 @@ export function ActivityElevationChart({
       tooltip!.style.display = 'none';
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fullData, zoomDomain, breakpoints, addMode, points, windZones, windMaxAbs, hasPower, plannedPowerSeries, microBoundariesKm]);
+  }, [
+    fullData,
+    zoomDomain,
+    breakpoints,
+    addMode,
+    points,
+    safeWindZones,
+    windMaxAbs,
+    hasPower,
+    hasSpeed,
+    safePlannedPowerSeries,
+    safePlannedSpeedSeries,
+    showPowerReal,
+    showPowerPlanned,
+    showSpeedReal,
+    showSpeedPlanned,
+    safeMicroBoundariesKm
+  ]);
 
   if (points.length < 2) return null;
+
+  const hasPlannedPower = safePlannedPowerSeries.length > 1;
+  const hasPlannedSpeed = safePlannedSpeedSeries.length > 1;
+  const canToggleAnything = hasPower || hasPlannedPower || hasSpeed || hasPlannedSpeed;
 
   return (
     <>
@@ -539,30 +708,112 @@ export function ActivityElevationChart({
                 </span>
               </>
             )}
+            {canToggleAnything && (
+              // 4 toggle indipendenti, non 2 gruppi ("Potenza"/"Velocità" uniti): altrimenti
+              // non è possibile nascondere solo "velocità pianificata" tenendo "velocità
+              // reale" visibile (o viceversa per la potenza) — ognuna delle 4 combinazioni
+              // reale/pianificata × potenza/velocità va spenta/accesa per conto suo.
+              <div className="stream-toggles">
+                {hasPower && (
+                  <label className="stream-toggle">
+                    <input type="checkbox" checked={showPowerReal} onChange={e => setShowPowerReal(e.target.checked)} />
+                    <i style={{ background: COLOR_POWER_REAL }} /> Potenza reale
+                  </label>
+                )}
+                {hasPlannedPower && (
+                  <label className="stream-toggle">
+                    <input type="checkbox" checked={showPowerPlanned} onChange={e => setShowPowerPlanned(e.target.checked)} />
+                    <i
+                      style={{
+                        background: `repeating-linear-gradient(to right, ${COLOR_POWER_PLANNED} 0 5px, transparent 5px 8px)`,
+                        width: 16,
+                        height: 3,
+                        borderRadius: 0
+                      }}
+                    />{' '}
+                    Potenza {plannedPowerLabel}
+                  </label>
+                )}
+                {hasSpeed && (
+                  <label className="stream-toggle">
+                    <input type="checkbox" checked={showSpeedReal} onChange={e => setShowSpeedReal(e.target.checked)} />
+                    <i style={{ background: COLOR_SPEED_REAL }} /> Velocità reale
+                  </label>
+                )}
+                {hasPlannedSpeed && (
+                  <label className="stream-toggle">
+                    <input type="checkbox" checked={showSpeedPlanned} onChange={e => setShowSpeedPlanned(e.target.checked)} />
+                    <i
+                      style={{
+                        background: `repeating-linear-gradient(to right, ${COLOR_SPEED_PLANNED} 0 5px, transparent 5px 8px)`,
+                        width: 16,
+                        height: 3,
+                        borderRadius: 0
+                      }}
+                    />{' '}
+                    Velocità {plannedSpeedLabel}
+                  </label>
+                )}
+              </div>
+            )}
           </div>
-          <SmoothingControl radiusMeters={smoothingRadiusMeters} onChange={onSmoothingChange} />
+          <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            {(hasPower || hasSpeed) && (
+              <label className="smoothing-control">
+                <span>Media potenza/velocità (s):</span>
+                <NumberField className="stream-smoothing-input" min={0} max={300} step={5} value={streamSmoothingSec} onCommit={v => setStreamSmoothingSec(Math.max(0, v))} />
+              </label>
+            )}
+            <SmoothingControl radiusMeters={smoothingRadiusMeters} onChange={onSmoothingChange} />
+          </div>
         </div>
       </div>
       <div ref={containerRef} className="elevation-chart" />
-      {plannedPowerSeries.length > 1 && (
+      {(showPowerReal && hasPower) || (showPowerPlanned && hasPlannedPower) ? (
         <div className="wind-ribbon-legend elevation-power-legend">
-          <span>
-            <i style={{ background: '#fc5200' }} /> potenza reale
-          </span>
-          <span>
-            <i
-              style={{
-                background: 'repeating-linear-gradient(to right, #7c9cff 0 5px, transparent 5px 8px)',
-                width: 16,
-                height: 3,
-                borderRadius: 0
-              }}
-            />{' '}
-            potenza pianificata
-          </span>
+          {showPowerReal && hasPower && (
+            <span>
+              <i style={{ background: COLOR_POWER_REAL }} /> potenza reale
+            </span>
+          )}
+          {showPowerPlanned && hasPlannedPower && (
+            <span>
+              <i
+                style={{
+                  background: `repeating-linear-gradient(to right, ${COLOR_POWER_PLANNED} 0 5px, transparent 5px 8px)`,
+                  width: 16,
+                  height: 3,
+                  borderRadius: 0
+                }}
+              />{' '}
+              potenza {plannedPowerLabel}
+            </span>
+          )}
         </div>
-      )}
-      {windZones.length >= 2 && (
+      ) : null}
+      {(showSpeedReal && hasSpeed) || (showSpeedPlanned && hasPlannedSpeed) ? (
+        <div className="wind-ribbon-legend elevation-speed-legend">
+          {showSpeedReal && hasSpeed && (
+            <span>
+              <i style={{ background: COLOR_SPEED_REAL }} /> velocità reale
+            </span>
+          )}
+          {showSpeedPlanned && hasPlannedSpeed && (
+            <span>
+              <i
+                style={{
+                  background: `repeating-linear-gradient(to right, ${COLOR_SPEED_PLANNED} 0 5px, transparent 5px 8px)`,
+                  width: 16,
+                  height: 3,
+                  borderRadius: 0
+                }}
+              />{' '}
+              velocità {plannedSpeedLabel}
+            </span>
+          )}
+        </div>
+      ) : null}
+      {safeWindZones.length >= 2 && (
         <div className="wind-ribbon-legend elevation-wind-legend">
           <span>
             <i style={{ background: '#22c55e' }} /> in coda

@@ -69,11 +69,22 @@ export function ElevationChart({
   addMode,
   onAddBreakpoint,
   onRemoveBreakpoint,
-  windZones = []
+  windZones
 }: ElevationChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [zoomDomain, setZoomDomain] = useState<[number, number] | null>(null);
   const [selectionStats, setSelectionStats] = useState<SelectionStats | null>(null);
+
+  // Stessa identica classe di bug del commento qui sotto sui callback, ma sul lato dati:
+  // `windZones = []` come default-parameter crea un array NUOVO a ogni esecuzione della
+  // funzione componente quando il chiamante omette la prop. Oggi entrambi i call site la
+  // passano sempre esplicitamente, quindi non è (ancora) un problema attivo qui — ma è
+  // esattamente il tipo di svista che ha causato il bug analogo, mai chiuso per mesi, in
+  // ActivityElevationChart.tsx (lì via `microBoundariesKm` omesso in un punto). Un
+  // riferimento stabile via useRef, mai ricreato, protegge anche da un futuro call site che
+  // dimenticasse di passarla.
+  const stableEmptyArrayRef = useRef<never[]>([]);
+  const safeWindZones = windZones ?? stableEmptyArrayRef.current;
 
   // I callback passati da fuori cambiano identità ad ogni render del genitore (sono
   // funzioni inline). Tenerli in un ref invece che nelle dipendenze dell'effetto D3
@@ -119,20 +130,20 @@ export function ElevationChart({
   // porzione zoomata): tiene la scala colore/opacità della fascia vento stabile quando si
   // zooma, altrimenti "rosso pieno" cambierebbe significato ad ogni zoom-in.
   const windMaxAbs = useMemo(() => {
-    if (windZones.length < 2 || points.length < 2) return 0;
+    if (safeWindZones.length < 2 || points.length < 2) return 0;
     const totalKm = points[points.length - 1]!.dist / 1000;
     if (totalKm <= 0) return 0;
     let max = 0;
     const coarseSamples = 150;
     for (let i = 0; i <= coarseSamples; i++) {
       const km = (totalKm * i) / coarseSamples;
-      const wind = windAtDistKm(windZones, km);
+      const wind = windAtDistKm(safeWindZones, km);
       if (!wind) continue;
       const bearing = routeBearingAtDistKm(points, km);
       max = Math.max(max, Math.abs(effectiveHeadwindKmh(wind.speedKmh, wind.directionDeg, bearing)));
     }
     return Math.max(max, 3);
-  }, [points, windZones]);
+  }, [points, safeWindZones]);
 
   // Reset dello zoom quando cambia il percorso (non quando cambia solo lo smoothing:
   // in quel caso ha senso restare sulla stessa porzione che si stava guardando).
@@ -214,7 +225,7 @@ export function ElevationChart({
     // allo zoom (mostrava sempre l'intero percorso anche col grafico zoomato su un tratto).
     // Disegnandola qui, nello stesso <g> e con la stessa xScale(d0,d1), il colore sotto un
     // punto del profilo corrisponde SEMPRE esattamente a quel punto, zoom incluso.
-    if (windZones.length >= 2 && windMaxAbs > 0) {
+    if (safeWindZones.length >= 2 && windMaxAbs > 0) {
       const bandH = 7;
       const bandY = -bandH - 5;
       const bandSamples = 110;
@@ -223,7 +234,7 @@ export function ElevationChart({
       for (let i = 0; i < bandSamples; i++) {
         const kmStart = d0 + i * stepKm;
         const kmMid = kmStart + stepKm / 2;
-        const wind = windAtDistKm(windZones, kmMid);
+        const wind = windAtDistKm(safeWindZones, kmMid);
         const headwindKmh = wind ? effectiveHeadwindKmh(wind.speedKmh, wind.directionDeg, routeBearingAtDistKm(points, kmMid)) : 0;
         const x = xScale(kmStart);
         const wpx = Math.max(1, xScale(kmStart + stepKm) - x);
@@ -397,8 +408,20 @@ export function ElevationChart({
       .attr('stroke', '#555')
       .attr('stroke-width', 1)
       .attr('stroke-dasharray', '4,3')
-      .attr('opacity', 0);
-    const hoverDot = g.append('circle').attr('r', 5).attr('fill', '#fc5200').attr('stroke', '#fff').attr('stroke-width', 2).attr('opacity', 0);
+      .attr('opacity', 0)
+      // Vedi commento gemello in ActivityElevationChart.tsx: mai stato coperto dal fix
+      // pointer-events del resto degli elementi decorativi. Un cerchio pieno disegnato
+      // esattamente sotto il cursore può rubare l'hit-test a un puntatore fermo, causando la
+      // sparizione dell'hover solo da fermi (mai mentre ci si muove).
+      .attr('pointer-events', 'none');
+    const hoverDot = g
+      .append('circle')
+      .attr('r', 5)
+      .attr('fill', '#fc5200')
+      .attr('stroke', '#fff')
+      .attr('stroke-width', 2)
+      .attr('opacity', 0)
+      .attr('pointer-events', 'none');
 
     const bisectDist = d3.bisector<ChartDatum, number>(d => d.dist).left;
 
@@ -502,7 +525,7 @@ export function ElevationChart({
     // onHoverPoint/onAddBreakpoint/onRemoveBreakpoint sono letti via ref apposta (vedi sopra):
     // includerli qui farebbe ricostruire l'intero grafico ad ogni hover.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fullData, zoomDomain, breakpoints, sections, addMode, points, windZones, windMaxAbs]);
+  }, [fullData, zoomDomain, breakpoints, sections, addMode, points, safeWindZones, windMaxAbs]);
 
   if (points.length < 2) return null;
 
@@ -539,7 +562,7 @@ export function ElevationChart({
         </div>
       </div>
       <div ref={containerRef} className="elevation-chart" />
-      {windZones.length >= 2 && (
+      {safeWindZones.length >= 2 && (
         <div className="wind-ribbon-legend elevation-wind-legend">
           <span>
             <i style={{ background: '#22c55e' }} /> in coda

@@ -38,6 +38,22 @@ export function smoothByDistance(values: number[], distances: number[], radiusMe
   return smoothed;
 }
 
+/**
+ * Media mobile su una finestra di TEMPO (secondi) invece che di distanza — stesso identico
+ * algoritmo di `smoothByDistance` (una media mobile "a due puntatori" su un asse crescente),
+ * semplicemente applicato a `timesSec` invece che a `distances`. Serve per potenza e
+ * velocità REALI di un'attività: una finestra a distanza fissa (metri) copre un tempo
+ * diverso a seconda della velocità istantanea (pochi secondi in discesa, molti in salita
+ * lenta), mentre chi guarda potenza/velocità ragiona in "media sugli ultimi N secondi" — lo
+ * stesso concetto delle medie mobili di potenza già familiari da device/Strava/TrainingPeaks.
+ * Richiede un campo tempo per punto (`timeSec` di `ActivityDisplayPoint`): non disponibile
+ * su un percorso pianificato (nessun orologio finché non lo si percorre), quindi si applica
+ * solo ai dati REALI di un'uscita, mai al profilo/pendenza del percorso pianificato.
+ */
+export function smoothByTime(values: number[], timesSec: number[], radiusSeconds: number): number[] {
+  return smoothByDistance(values, timesSec, radiusSeconds);
+}
+
 export interface ChartPoint {
   dist: number;
   ele: number;

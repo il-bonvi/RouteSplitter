@@ -145,6 +145,57 @@ describe('SectionPlanSchema — plannedStartTime e windZones.timeSamples', () =>
     expect(parsed.windZones[1]!.timeSamples).toEqual([]);
   });
 
+  it('pacingStepMeters è 100 di default se non specificato', () => {
+    const now = nowIso();
+    const parsed = SectionPlanSchema.parse({
+      id: 'sp1',
+      schemaVersion: 1,
+      createdAt: now,
+      updatedAt: now,
+      routeId: 'route-1',
+      name: 'Piano gara',
+      calcMode: 'speed',
+      defaultSpeedKmh: 40,
+      breakpoints: validBreakpoints
+    });
+    expect(parsed.pacingStepMeters).toBe(100);
+  });
+
+  it('accetta un pacingStepMeters valido esplicito', () => {
+    const now = nowIso();
+    const parsed = SectionPlanSchema.parse({
+      id: 'sp1',
+      schemaVersion: 1,
+      createdAt: now,
+      updatedAt: now,
+      routeId: 'route-1',
+      name: 'Piano gara',
+      calcMode: 'speed',
+      defaultSpeedKmh: 40,
+      breakpoints: validBreakpoints,
+      pacingStepMeters: 500
+    });
+    expect(parsed.pacingStepMeters).toBe(500);
+  });
+
+  it('rifiuta un pacingStepMeters sotto i 50m', () => {
+    const now = nowIso();
+    expect(() =>
+      SectionPlanSchema.parse({
+        id: 'sp1',
+        schemaVersion: 1,
+        createdAt: now,
+        updatedAt: now,
+        routeId: 'route-1',
+        name: 'Piano gara',
+        calcMode: 'speed',
+        defaultSpeedKmh: 40,
+        breakpoints: validBreakpoints,
+        pacingStepMeters: 10
+      })
+    ).toThrow();
+  });
+
   it('accetta timeSamples validi su una zona vento', () => {
     const now = nowIso();
     const parsed = SectionPlanSchema.parse({

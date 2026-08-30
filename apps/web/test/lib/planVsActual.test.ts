@@ -66,6 +66,38 @@ describe('computePlanVsActualSections', () => {
     }
   });
 
+  it('breakpointId punta al breakpoint che TERMINA ciascuna sezione (dove vive il target)', () => {
+    const points = flatRoute(20);
+    const { points: activityPoints, samples } = syntheticActivity(20, 30);
+    const rows = computePlanVsActualSections(breakpoints, points, params, 'speed', 250, undefined, null, activityPoints, samples);
+
+    expect(rows[0]!.breakpointId).toBe('mid');
+    expect(rows[1]!.breakpointId).toBe('finish');
+  });
+
+  it('verifiedSpeedKmh (a livello di sezione) usa la potenza REALE della sezione con la stessa fisica del piano', () => {
+    const points = flatRoute(20);
+    // Piano: 30 km/h target. Uscita reale: 24 km/h costanti (stessa fisica piatta/vento
+    // nullo del piano) — la potenza reale corrisponde quindi a "24 km/h in piano".
+    const { points: activityPoints, samples } = syntheticActivity(20, 24);
+    const rows = computePlanVsActualSections(breakpoints, points, params, 'speed', 250, undefined, null, activityPoints, samples);
+
+    for (const row of rows) {
+      expect(row.verifiedSpeedKmh).not.toBeNull();
+      expect(row.verifiedSpeedKmh!).toBeCloseTo(24, 0);
+      expect(row.plannedSpeedKmh).toBeCloseTo(30, 0);
+    }
+  });
+
+  it('verifiedSpeedKmh è null quando la sezione non ha alcun campione di potenza reale', () => {
+    const points = flatRoute(20);
+    const rows = computePlanVsActualSections(breakpoints, points, params, 'speed', 250, undefined, null, [], []);
+    for (const row of rows) {
+      expect(row.actualPowerWatts).toBeNull();
+      expect(row.verifiedSpeedKmh).toBeNull();
+    }
+  });
+
   it('senza dati reali per una sezione (nessun campione), i campi actual restano null', () => {
     const points = flatRoute(20);
     // Attività che copre solo i primi 5 km del percorso di 20 km.
@@ -114,6 +146,35 @@ describe('computePlanVsActualFineGrid', () => {
       expect(Number.isFinite(p.ele)).toBe(true);
     }
     expect(grid.some(p => p.actualSpeedKmh != null)).toBe(true);
+  });
+
+  it('verifiedSpeedKmh usa la potenza REALE del bin (non quella pianificata) con la stessa fisica — "verifica dati" a livello di microsezione', () => {
+    const points = flatRoute(20);
+    // Piano: 30 km/h target. Uscita reale: sistematicamente più lenta, 24 km/h costanti su
+    // pianura (stessa fisica piatta/vento nullo del piano) — la potenza reale corrisponde
+    // quindi esattamente a "24 km/h in piano", non ai 30 km/h pianificati.
+    const { samples } = syntheticActivity(20, 24);
+    const grid = computePlanVsActualFineGrid(breakpoints, points, params, 'speed', 250, undefined, 20, samples, 1);
+
+    const withActual = grid.filter(p => p.actualPowerWatts != null);
+    expect(withActual.length).toBeGreaterThan(0);
+    for (const p of withActual) {
+      // Il modello, alimentato con la potenza REALE (che è quella di un'uscita a 24 km/h
+      // in piano), deve predire ~24 km/h — non i 30 km/h del piano — a riprova che
+      // verifiedSpeedKmh riflette davvero l'input di potenza reale, non quello pianificato.
+      expect(p.verifiedSpeedKmh).not.toBeNull();
+      expect(p.verifiedSpeedKmh!).toBeCloseTo(24, 0);
+      expect(p.plannedSpeedKmh).toBeCloseTo(30, 0);
+    }
+  });
+
+  it('verifiedSpeedKmh è null quando il bin non ha un campione di potenza reale', () => {
+    const points = flatRoute(20);
+    const grid = computePlanVsActualFineGrid(breakpoints, points, params, 'speed', 250, undefined, 20, [], 1);
+    for (const p of grid) {
+      expect(p.actualPowerWatts).toBeNull();
+      expect(p.verifiedSpeedKmh).toBeNull();
+    }
   });
 
   it('rispetta il passo richiesto (stepKm) — bin equispaziati, non un numero fisso di bin', () => {

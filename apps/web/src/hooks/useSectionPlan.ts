@@ -305,6 +305,14 @@ export function useSectionPlan(routeId: string | null, distanceKm: number) {
     [save]
   );
 
+  const setPacingStepMeters = useCallback(
+    async (pacingStepMeters: number) => {
+      if (!Number.isFinite(pacingStepMeters) || pacingStepMeters < 50) return;
+      await save({ pacingStepMeters });
+    },
+    [save]
+  );
+
   /** Azzera del tutto le zone vento (equivalente a "vento non configurato"). */
   const clearWindZones = useCallback(async () => {
     if (!plan) return;
@@ -331,6 +339,7 @@ export function useSectionPlan(routeId: string | null, distanceKm: number) {
     removeWindTimeSample,
     resetWindZones,
     clearWindZones,
-    setPlannedStartTime
+    setPlannedStartTime,
+    setPacingStepMeters
   };
 }

@@ -75,7 +75,8 @@ export function RouteSplitterApp() {
     addWindTimeSample,
     removeWindTimeSample,
     resetWindZones,
-    setPlannedStartTime
+    setPlannedStartTime,
+    setPacingStepMeters
   } = useSectionPlan(selectedRoute?.id ?? null, selectedRoute?.distanceKm ?? 0);
 
   const defaultPowerWatts = plan?.defaultPowerWatts ?? 250;
@@ -230,6 +231,9 @@ export function RouteSplitterApp() {
         if (parsed.plannedStartTime != null) {
           await setPlannedStartTime(parsed.plannedStartTime);
         }
+        if (parsed.pacingStepMeters != null) {
+          await setPacingStepMeters(parsed.pacingStepMeters);
+        }
         if (parsed.routeName) {
           const updated = await store.routes.update(selectedRoute.id, { name: parsed.routeName });
           setSelectedRoute(updated);
@@ -240,7 +244,7 @@ export function RouteSplitterApp() {
         setError(err instanceof Error ? err.message : 'Errore sconosciuto durante l\'importazione.');
       }
     },
-    [selectedRoute, plan, replaceBreakpoints, store, refreshRoutes]
+    [selectedRoute, plan, replaceBreakpoints, store, refreshRoutes, setPlannedStartTime, setPacingStepMeters]
   );
 
   return (
@@ -340,6 +344,8 @@ export function RouteSplitterApp() {
               totalDistanceKm={selectedRoute.distanceKm}
               windZones={plan.windZones}
               onApplyPowers={updates => void applyPowerUpdates(updates)}
+              stepMeters={plan.pacingStepMeters}
+              onStepMetersChange={v => void setPacingStepMeters(v)}
             />
           )}
 

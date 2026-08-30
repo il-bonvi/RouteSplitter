@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { smoothByDistance, lttb } from '../../src/physics-core/smoothing.js';
+import { smoothByDistance, smoothByTime, lttb } from '../../src/physics-core/smoothing.js';
 
 describe('smoothByDistance', () => {
   it('con raggio 0 (o non positivo) restituisce i valori invariati', () => {
@@ -32,6 +32,32 @@ describe('smoothByDistance', () => {
     const distances = [0, 100, 200, 300, 400, 500, 600];
     const smoothed = smoothByDistance(values, distances, 50); // raggio 50m: alla distanza 300 include solo se stesso
     expect(smoothed[3]!).toBeCloseTo(100, 6); // nessun vicino entro 50m in questa serie rada
+  });
+});
+
+describe('smoothByTime', () => {
+  it('con raggio 0 restituisce i valori invariati (stesso comportamento di smoothByDistance)', () => {
+    const values = [100, 200, 150, 300];
+    const timesSec = [0, 5, 10, 15];
+    expect(smoothByTime(values, timesSec, 0)).toEqual(values);
+  });
+
+  it('smussa un picco isolato di potenza usando il tempo (secondi) come asse, non la distanza', () => {
+    // Punti molto più fitti in tempo che in una tipica serie a distanza: verifica che la
+    // finestra sia interpretata in secondi, non in una qualunque altra unità.
+    const values = [150, 150, 150, 500, 150, 150, 150];
+    const timesSec = [0, 1, 2, 3, 4, 5, 6];
+    const smoothed = smoothByTime(values, timesSec, 2);
+    expect(smoothed[3]!).toBeLessThan(500);
+    expect(smoothed[3]!).toBeGreaterThan(150);
+  });
+
+  it('una finestra più larga (in secondi) diluisce di più un picco isolato', () => {
+    const values = [0, 0, 0, 0, 100, 0, 0, 0, 0];
+    const timesSec = [0, 1, 2, 3, 4, 5, 6, 7, 8];
+    const narrow = smoothByTime(values, timesSec, 0.5);
+    const wide = smoothByTime(values, timesSec, 3);
+    expect(narrow[4]!).toBeGreaterThan(wide[4]!);
   });
 });
 

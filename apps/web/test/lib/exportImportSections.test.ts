@@ -14,6 +14,7 @@ const plan: SectionPlan = {
   defaultPowerWatts: 250,
   windZones: [],
   plannedStartTime: null,
+  pacingStepMeters: 250,
   breakpoints: [
     { id: 'start', distKm: 0, fixed: 'start', sectionLabel: null, speedKmh: null, powerWatts: null },
     { id: 'mid', distKm: 10, fixed: false, sectionLabel: 'S1', speedKmh: 35, powerWatts: null },
@@ -41,6 +42,25 @@ describe('parseSectionsImport', () => {
     expect(parsed.breakpoints[2]!.distKm).toBe(20);
     expect(parsed.breakpoints[1]!.speedKmh).toBe(35);
     expect(parsed.calcMode).toBe('speed');
+    expect(parsed.pacingStepMeters).toBe(250);
+  });
+
+  it('un file senza pacingStepMeters non tocca il passo esistente (torna null)', () => {
+    const legacyPayload = {
+      type: 'routesplitter-sections',
+      points: [
+        { distKm: 0, fixed: 'start', sectionLabel: null, speed: null, power: null },
+        { distKm: 20, fixed: 'finish', sectionLabel: 'S1', speed: 40, power: null }
+      ]
+    };
+    const parsed = parseSectionsImport(JSON.stringify(legacyPayload), 20, 40);
+    expect(parsed.pacingStepMeters).toBeNull();
+  });
+
+  it('rifiuta un pacingStepMeters sotto la soglia minima (50m), tornando null', () => {
+    const payload = { ...buildSectionsExportPayload('Test', 20, plan), pacingStepMeters: 10 };
+    const parsed = parseSectionsImport(JSON.stringify(payload), 20, 40);
+    expect(parsed.pacingStepMeters).toBeNull();
   });
 
   it('aggiunge start/finish mancanti invece di fallire', () => {

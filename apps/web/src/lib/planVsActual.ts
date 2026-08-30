@@ -30,6 +30,11 @@ export interface PlanVsActualSectionRow {
   fromKm: number;
   toKm: number;
   distanceKm: number;
+  /** Id del breakpoint che TERMINA questa sezione — è quello su cui è impostato il target
+   * (velocità o potenza) letto da `computeSections` (`to.speedKmh`/`to.powerWatts`), quindi
+   * quello su cui scrivere per modificare il piano di questa sezione dall'esterno (es. "usa
+   * la potenza reale registrata qui" — vedi bottone "Verifica dati" in Tab 3). */
+  breakpointId: string;
   plannedSpeedKmh: number;
   plannedPowerWatts: number;
   plannedTimeHours: number;
@@ -45,6 +50,12 @@ export interface PlanVsActualSectionRow {
   deltaPowerPct: number | null;
   /** vento implicito reale - vento pianificato. Positivo = più testa del previsto. */
   deltaWindKmh: number | null;
+  /** "Verifica dati" a livello di sezione: velocità che il modello predice usando la potenza
+   * MEDIA REALE di questa sezione (non quella pianificata), con la STESSA pendenza netta e
+   * vento effettivo già usati per `plannedSpeedKmh` — stesso principio di
+   * `PlanVsActualFinePoint.verifiedSpeedKmh` (microsezioni), qui a livello di sezione
+   * personalizzata. `null` quando la sezione non ha alcun campione di potenza reale. */
+  verifiedSpeedKmh: number | null;
 }
 
 /**
@@ -115,12 +126,20 @@ export function computePlanVsActualSections(
     const deltaPowerPct = actualPowerWatts != null && pr.powerWatts > 0 ? ((actualPowerWatts - pr.powerWatts) / pr.powerWatts) * 100 : null;
     const deltaWindKmh = actualWindHeadwindKmh != null ? actualWindHeadwindKmh - pr.windHeadwindKmh : null;
 
+    // Ricostruisce lo STESSO effectiveParams usato internamente da computeSections per
+    // calcolare pr.speedKmh — pr.windHeadwindKmh è già il valore corretto in entrambi i
+    // rami (con o senza zone vento), quindi questo riproduce esattamente lo stesso contesto
+    // fisico senza dover esportare effectiveParams da computeSections.
+    const effectiveParamsForVerify: PhysicsParams = { ...params, windKmh: pr.windHeadwindKmh };
+    const verifiedSpeedKmh = actualPowerWatts != null ? speedFromPower(actualPowerWatts, pr.gradient, effectiveParamsForVerify) * 3.6 : null;
+
     return {
       index: i + 1,
       label: pr.to.sectionLabel,
       fromKm,
       toKm,
       distanceKm: pr.distanceKm,
+      breakpointId: pr.to.id,
       plannedSpeedKmh: pr.speedKmh,
       plannedPowerWatts: pr.powerWatts,
       plannedTimeHours: pr.timeHours,
@@ -133,7 +152,8 @@ export function computePlanVsActualSections(
       deltaTimeHours,
       deltaSpeedPct,
       deltaPowerPct,
-      deltaWindKmh
+      deltaWindKmh,
+      verifiedSpeedKmh
     };
   });
 }
@@ -171,6 +191,14 @@ export interface PlanVsActualFinePoint {
   plannedPowerWatts: number;
   actualSpeedKmh: number | null;
   actualPowerWatts: number | null;
+  /** "Verifica dati" a livello di microsezione: velocità che il modello fisico predice
+   * usando la potenza REALE di questo bin (non quella pianificata), con la STESSA pendenza,
+   * vento e CdA effettivi già usati per `plannedSpeedKmh` — cambia solo l'input potenza.
+   * A differenza del bottone "Verifica dati" delle sezioni macro (che sovrascrive il piano
+   * persistito, impraticabile qui: centinaia di micro-bin non possono diventare breakpoint),
+   * questo campo è puramente calcolato per il confronto, non tocca nulla di persistito.
+   * `null` quando il bin non ha un campione di potenza reale (nessun dato da verificare). */
+  verifiedSpeedKmh: number | null;
 }
 
 function findCoveringPair(sorted: SectionBreakpoint[], distKm: number): [SectionBreakpoint, SectionBreakpoint] {
@@ -242,8 +270,21 @@ export function computePlanVsActualFineGrid(
       actualPowerWatts = p.length > 0 ? p.reduce((s, x) => s + x.powerW, 0) / p.length : null;
     }
 
+    const verifiedSpeedKmh = actualPowerWatts != null ? speedFromPower(actualPowerWatts, seg.gradient, effectiveParams) * 3.6 : null;
+
     const ele = getInterpolatedPoint(routePoints, midKm * 1000).ele;
 
-    return { distKm: midKm, fromKm: seg.d0Km, toKm: seg.d1Km, ele, gradientPct: seg.gradient, plannedSpeedKmh, plannedPowerWatts, actualSpeedKmh, actualPowerWatts };
+    return {
+      distKm: midKm,
+      fromKm: seg.d0Km,
+      toKm: seg.d1Km,
+      ele,
+      gradientPct: seg.gradient,
+      plannedSpeedKmh,
+      plannedPowerWatts,
+      actualSpeedKmh,
+      actualPowerWatts,
+      verifiedSpeedKmh
+    };
   });
 }

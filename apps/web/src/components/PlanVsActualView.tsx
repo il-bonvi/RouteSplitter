@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { processRoute, computeSections, parseClockTimeToMinutes, type PhysicsParams, type ProcessedPoint } from '@physics-core';
+import { processRoute, computeSections, parseClockTimeToMinutes, type PhysicsParams, type ProcessedPoint, type SectionBreakpoint } from '@physics-core';
 import type { Route } from '@shared-schema';
 import { useDataStore } from '../lib/DataStoreContext.js';
 import { useSectionPlan } from '../hooks/useSectionPlan.js';
@@ -24,7 +24,21 @@ interface PlanVsActualViewProps {
   onPhysicsParamsChange: (params: PhysicsParams) => void;
 }
 
-const MICRO_STEP_OPTIONS = [0.1, 0.25, 0.5, 1] as const;
+// Riferimento stabile per "nessun breakpoint" nel pannello microsezioni: un literal `[]`
+// inline verrebbe ricreato a ogni render, e siccome ActivityElevationChart ha `breakpoints`
+// nel dependency array del suo useEffect di disegno, una nuova identità ad ogni render
+// forzava lo smontaggio/ricostruzione COMPLETA del grafico (incl. l'hover) a ogni singolo
+// movimento del mouse — proprio nel pannello dove l'hover doveva restare stabile.
+const NO_BREAKPOINTS: SectionBreakpoint[] = [];
+
+// Stesso principio di NO_BREAKPOINTS: il grafico principale "confronto con uscita reale" non
+// ha una vera griglia di microsezioni da mostrare (quella è solo nel pannello dedicato), ma
+// passarla esplicitamente qui evita di appoggiarsi al default-parameter del componente — che
+// è già stato reso sicuro (vedi ActivityElevationChart.tsx), ma un riferimento esplicito e
+// stabile è comunque più chiaro da leggere a chi apre questo file in futuro.
+const NO_MICRO_BOUNDARIES: number[] = [];
+
+function noop() {}
 
 function windBadge(headwindKmh: number) {
   if (Math.abs(headwindKmh) < 0.5) return <span className="wind-badge wind-badge-neutral">— </span>;
@@ -99,7 +113,8 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
     addWindTimeSample,
     removeWindTimeSample,
     resetWindZones,
-    setPlannedStartTime
+    setPlannedStartTime,
+    setPacingStepMeters
   } = useSectionPlan(selectedRouteId || null, selectedRoute?.distanceKm ?? 0);
 
   // Editing del piano pianificato (percorso) — stessi controlli della tab "Percorso", ma
@@ -128,7 +143,10 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
   const [activitySmoothingRadiusMeters, setActivitySmoothingRadiusMeters] = useState(50);
 
   const [microOpen, setMicroOpen] = useState(false);
-  const [microStepKm, setMicroStepKm] = useState<number>(0.25);
+  // Non più uno stato indipendente: il passo delle microsezioni DEVE coincidere con quello su
+  // cui lavora l'ottimizzatore di pacing ("Ottimizza completo"), altrimenti il grafico non
+  // dimostrerebbe le sezioni realmente scelte. Unica fonte di verità: plan.pacingStepMeters.
+  const microStepKm = (plan?.pacingStepMeters ?? 100) / 1000;
   const [microHoverPoint, setMicroHoverPoint] = useState<{ lat: number; lon: number } | null>(null);
   const [microSmoothingRadiusMeters, setMicroSmoothingRadiusMeters] = useState(50);
 
@@ -229,9 +247,38 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
     );
   }, [plan, routePoints, physicsParams, display, cdaBuilt]);
 
-  const plannedPowerSeries = useMemo(() => {
+  // "Verifica dati" per le sezioni custom (piano manuale): toggle non distruttivo, esattamente
+  // come per le microsezioni più sotto — NON sovrascrive il piano persistito. Quando attivo,
+  // sostituisce ovunque "pianificata" con "verificata" (velocità che il modello predice dalla
+  // potenza REALE media della sezione, stessa fisica di `plannedSpeedKmh` — vedi
+  // `PlanVsActualSectionRow.verifiedSpeedKmh` in lib/planVsActual.ts). Un'unica sorgente di
+  // stato per restare coerente sia nella tabella "Confronto per sezione" sia nel grafico
+  // "Mappa e altimetria uscita reale" qui sotto (entrambi derivano dalle stesse sezioni).
+  const [sectionsVerifyMode, setSectionsVerifyMode] = useState(false);
+  const sectionsWithRealPower = useMemo(() => rows.filter(r => r.actualPowerWatts != null).length, [rows]);
+
+  // Righe "effettive" per la tabella "Confronto per sezione" — unica fonte per tabella E
+  // riepilogo (`summary` sotto), così non possono disallinearsi fra loro (bug segnalato: la
+  // tabella non si aggiornava con la verifica dati). Quando sectionsVerifyMode è attivo E la
+  // sezione ha un campione di potenza reale, "pianificata" diventa "verificata" (potenza
+  // reale, velocità che il modello ne deriva) e i delta sono ricalcolati di conseguenza;
+  // altrimenti resta il valore del piano originale (nulla da verificare per quella sezione).
+  const displayRows = useMemo(() => {
+    return rows.map(r => {
+      const hasVerified = sectionsVerifyMode && r.actualPowerWatts != null && r.verifiedSpeedKmh != null;
+      const plannedSpeedKmh = hasVerified ? r.verifiedSpeedKmh! : r.plannedSpeedKmh;
+      const plannedPowerWatts = hasVerified ? r.actualPowerWatts! : r.plannedPowerWatts;
+      const plannedTimeHours = hasVerified && plannedSpeedKmh > 0 ? r.distanceKm / plannedSpeedKmh : r.plannedTimeHours;
+      const deltaSpeedPct = r.actualSpeedKmh != null && plannedSpeedKmh > 0 ? ((r.actualSpeedKmh - plannedSpeedKmh) / plannedSpeedKmh) * 100 : null;
+      const deltaPowerPct = r.actualPowerWatts != null && plannedPowerWatts > 0 ? ((r.actualPowerWatts - plannedPowerWatts) / plannedPowerWatts) * 100 : null;
+      const deltaTimeHours = r.actualTimeHours != null ? r.actualTimeHours - plannedTimeHours : null;
+      return { ...r, plannedSpeedKmh, plannedPowerWatts, plannedTimeHours, deltaSpeedPct, deltaPowerPct, deltaTimeHours, isVerified: hasVerified };
+    });
+  }, [rows, sectionsVerifyMode]);
+
+  const plannedFineGrid = useMemo(() => {
     if (!plan || !routePoints || !display || !cdaBuilt) return [];
-    const raw = computePlanVsActualFineGrid(
+    return computePlanVsActualFineGrid(
       plan.breakpoints,
       routePoints,
       physicsParams,
@@ -240,12 +287,51 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
       plan.windZones,
       display.distanceKm,
       cdaBuilt.samples
-    ).map(p => ({ distKm: p.distKm, powerWatts: p.plannedPowerWatts }));
-    return padSeriesToRouteEdges(raw, display.distanceKm);
+    );
   }, [plan, routePoints, physicsParams, display, cdaBuilt]);
 
-  // Griglia a microsezioni: stessa funzione, passo scelto dall'utente — calcolata solo
-  // quando il pannello è aperto (nessun costo se non richiesta).
+  const plannedPowerSeries = useMemo(() => {
+    if (!display) return [];
+    return padSeriesToRouteEdges(
+      plannedFineGrid.map(p => ({ distKm: p.distKm, powerWatts: p.plannedPowerWatts })),
+      display.distanceKm
+    );
+  }, [plannedFineGrid, display]);
+
+  // Stessa griglia fine di plannedPowerSeries qui sopra (nessun ricalcolo): la velocità
+  // pianificata è già disponibile per ogni bin, va solo estratta e proiettata sul bordo del
+  // percorso come per la potenza.
+  const plannedSpeedSeries = useMemo(() => {
+    if (!display) return [];
+    return padSeriesToRouteEdges(
+      plannedFineGrid.map(p => ({ distKm: p.distKm, speedKmh: p.plannedSpeedKmh })),
+      display.distanceKm
+    );
+  }, [plannedFineGrid, display]);
+
+  // "Verifica dati" per le sezioni custom (toggle `sectionsVerifyMode` sopra): stessa griglia
+  // fine di plannedPowerSeries/plannedSpeedSeries, filtrata ai bin con un campione di potenza
+  // reale — analogo esatto di microVerifiedPowerSeries/microVerifiedSpeedSeries più sotto.
+  const verifiedPowerSeries = useMemo(() => {
+    if (!display) return [];
+    return padSeriesToRouteEdges(
+      plannedFineGrid.filter(p => p.actualPowerWatts != null).map(p => ({ distKm: p.distKm, powerWatts: p.actualPowerWatts! })),
+      display.distanceKm
+    );
+  }, [plannedFineGrid, display]);
+  const verifiedSpeedSeries = useMemo(() => {
+    if (!display) return [];
+    return padSeriesToRouteEdges(
+      plannedFineGrid.filter(p => p.verifiedSpeedKmh != null).map(p => ({ distKm: p.distKm, speedKmh: p.verifiedSpeedKmh! })),
+      display.distanceKm
+    );
+  }, [plannedFineGrid, display]);
+  const displayPowerSeries = sectionsVerifyMode ? verifiedPowerSeries : plannedPowerSeries;
+  const displaySpeedSeries = sectionsVerifyMode ? verifiedSpeedSeries : plannedSpeedSeries;
+
+  // Griglia a microsezioni: stessa funzione, stesso passo dell'ottimizzatore di pacing
+  // (plan.pacingStepMeters) — calcolata solo quando il pannello è aperto (nessun costo se
+  // non richiesta).
   const microGrid = useMemo(() => {
     if (!microOpen || !plan || !routePoints || !display || !cdaBuilt) return [];
     return computePlanVsActualFineGrid(
@@ -265,15 +351,62 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
     () => padSeriesToRouteEdges(microGrid.map(p => ({ distKm: p.distKm, powerWatts: p.plannedPowerWatts })), display?.distanceKm ?? 0),
     [microGrid, display]
   );
+  // Stessa griglia fine (a passo microsezioni) di microPlannedPowerSeries qui sopra.
+  const microPlannedSpeedSeries = useMemo(
+    () => padSeriesToRouteEdges(microGrid.map(p => ({ distKm: p.distKm, speedKmh: p.plannedSpeedKmh })), display?.distanceKm ?? 0),
+    [microGrid, display]
+  );
   const microBoundariesKm = useMemo(() => microGrid.map(p => p.distKm), [microGrid]);
 
-  const windRows = rows.filter(r => r.actualWindHeadwindKmh != null);
+  // "Verifica dati" a livello di MICROSEZIONE — equivalente del bottone omonimo sopra, ma per
+  // le microsezioni: qui NON si può sovrascrivere il piano persistito (centinaia di micro-bin
+  // non possono diventare breakpoint), quindi è un semplice TOGGLE di visualizzazione, non
+  // un'azione distruttiva. Filtra ai soli bin con un campione di potenza reale (altrove non
+  // c'è nulla da "verificare"); `verifiedSpeedKmh` è già calcolato dalla libreria con la
+  // STESSA fisica (pendenza, vento, CdA) della velocità pianificata, sostituendo solo la
+  // potenza in ingresso con quella reale di quel bin.
+  const [microVerifyMode, setMicroVerifyMode] = useState(false);
+  const microVerifiedPowerSeries = useMemo(
+    () =>
+      padSeriesToRouteEdges(
+        microGrid.filter(p => p.actualPowerWatts != null).map(p => ({ distKm: p.distKm, powerWatts: p.actualPowerWatts! })),
+        display?.distanceKm ?? 0
+      ),
+    [microGrid, display]
+  );
+  const microVerifiedSpeedSeries = useMemo(
+    () =>
+      padSeriesToRouteEdges(
+        microGrid.filter(p => p.verifiedSpeedKmh != null).map(p => ({ distKm: p.distKm, speedKmh: p.verifiedSpeedKmh! })),
+        display?.distanceKm ?? 0
+      ),
+    [microGrid, display]
+  );
+  const microDisplayPowerSeries = microVerifyMode ? microVerifiedPowerSeries : microPlannedPowerSeries;
+  const microDisplaySpeedSeries = microVerifyMode ? microVerifiedSpeedSeries : microPlannedSpeedSeries;
+  const microSectionsWithRealPower = useMemo(() => microGrid.filter(p => p.actualPowerWatts != null).length, [microGrid]);
+  // BUG SEGNALATO: la tabella delle microsezioni leggeva `microGrid` direttamente
+  // (plannedSpeedKmh/plannedPowerWatts sempre del PIANO), quindi non si aggiornava affatto
+  // quando si attivava "Verifica dati" — il grafico sopra cambiava, la tabella sotto no.
+  // Stesso principio di displayRows più sopra (sezioni custom): un'unica trasformazione
+  // "effettiva" applicata PRIMA sia al grafico (le serie microDisplay*Series qui sopra) sia
+  // alla tabella, così i due non possono più disallinearsi.
+  const microDisplayGrid = useMemo(() => {
+    return microGrid.map(p => {
+      const hasVerified = microVerifyMode && p.actualPowerWatts != null && p.verifiedSpeedKmh != null;
+      const plannedSpeedKmh = hasVerified ? p.verifiedSpeedKmh! : p.plannedSpeedKmh;
+      const plannedPowerWatts = hasVerified ? p.actualPowerWatts! : p.plannedPowerWatts;
+      return { ...p, plannedSpeedKmh, plannedPowerWatts, isVerified: hasVerified };
+    });
+  }, [microGrid, microVerifyMode]);
 
-  // Riepilogo compatto (3 righe: velocità/potenza/tempo) sopra la tabella di confronto —
-  // medie pesate sul tempo pianificato/reale di ciascuna sezione, non una semplice media
-  // aritmetica fra sezioni di lunghezza diversa.
-  const summary = useMemo(() => {
-    if (rows.length === 0) return null;
+  // Riepilogo compatto per le microsezioni — stesso identico layout/calcolo del riepilogo
+  // "Confronto per sezione" sopra (media pesata sul tempo, non aritmetica sulle sezioni):
+  // mancava, mentre la tabella di dettaglio sotto già c'era — le due viste devono avere lo
+  // stesso layout, non solo la stessa tabella. Il "tempo" per bin è ricavato da
+  // distanza/velocità (i bin non hanno già un campo tempo pianificato/reale come le sezioni).
+  const microSummary = useMemo(() => {
+    if (microDisplayGrid.length === 0) return null;
     let plannedDistKm = 0;
     let plannedTimeH = 0;
     let plannedPowerTimeWeighted = 0;
@@ -281,7 +414,54 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
     let actualTimeH = 0;
     let actualPowerTimeWeighted = 0;
     let hasActual = false;
-    for (const r of rows) {
+    for (const p of microDisplayGrid) {
+      const binDistKm = p.toKm - p.fromKm;
+      const plannedTimeHoursBin = p.plannedSpeedKmh > 0 ? binDistKm / p.plannedSpeedKmh : 0;
+      plannedDistKm += binDistKm;
+      plannedTimeH += plannedTimeHoursBin;
+      plannedPowerTimeWeighted += p.plannedPowerWatts * plannedTimeHoursBin;
+      if (p.actualSpeedKmh != null && p.actualSpeedKmh > 0) {
+        hasActual = true;
+        const actualTimeHoursBin = binDistKm / p.actualSpeedKmh;
+        actualTimeH += actualTimeHoursBin;
+        actualDistKm += p.actualSpeedKmh * actualTimeHoursBin;
+        if (p.actualPowerWatts != null) actualPowerTimeWeighted += p.actualPowerWatts * actualTimeHoursBin;
+      }
+    }
+    const plannedSpeedKmh = plannedTimeH > 0 ? plannedDistKm / plannedTimeH : 0;
+    const plannedPowerWatts = plannedTimeH > 0 ? plannedPowerTimeWeighted / plannedTimeH : 0;
+    const actualSpeedKmh = hasActual && actualTimeH > 0 ? actualDistKm / actualTimeH : null;
+    const actualPowerWatts = hasActual && actualTimeH > 0 ? actualPowerTimeWeighted / actualTimeH : null;
+    const actualTimeHoursTotal = hasActual ? actualTimeH : null;
+    return {
+      plannedSpeedKmh,
+      actualSpeedKmh,
+      deltaSpeedPct: actualSpeedKmh != null && plannedSpeedKmh > 0 ? ((actualSpeedKmh - plannedSpeedKmh) / plannedSpeedKmh) * 100 : null,
+      plannedPowerWatts,
+      actualPowerWatts,
+      deltaPowerPct: actualPowerWatts != null && plannedPowerWatts > 0 ? ((actualPowerWatts - plannedPowerWatts) / plannedPowerWatts) * 100 : null,
+      plannedTimeH,
+      actualTimeHoursTotal,
+      deltaTimeHours: actualTimeHoursTotal != null ? actualTimeHoursTotal - plannedTimeH : null
+    };
+  }, [microDisplayGrid]);
+
+  const windRows = rows.filter(r => r.actualWindHeadwindKmh != null);
+
+  // Riepilogo compatto (3 righe: velocità/potenza/tempo) sopra la tabella di confronto —
+  // medie pesate sul tempo pianificato/reale di ciascuna sezione, non una semplice media
+  // aritmetica fra sezioni di lunghezza diversa. Usa displayRows (non rows) per restare
+  // coerente col toggle "Verifica dati" qui sopra.
+  const summary = useMemo(() => {
+    if (displayRows.length === 0) return null;
+    let plannedDistKm = 0;
+    let plannedTimeH = 0;
+    let plannedPowerTimeWeighted = 0;
+    let actualDistKm = 0;
+    let actualTimeH = 0;
+    let actualPowerTimeWeighted = 0;
+    let hasActual = false;
+    for (const r of displayRows) {
       plannedDistKm += r.distanceKm;
       plannedTimeH += r.plannedTimeHours;
       plannedPowerTimeWeighted += r.plannedPowerWatts * r.plannedTimeHours;
@@ -308,8 +488,7 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
       actualTimeHoursTotal,
       deltaTimeHours: actualTimeHoursTotal != null ? actualTimeHoursTotal - plannedTimeH : null
     };
-  }, [rows]);
-  const noop = () => {};
+  }, [displayRows]);
 
   return (
     <div className="activity-analysis-view">
@@ -406,6 +585,8 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
               totalDistanceKm={selectedRoute.distanceKm}
               windZones={plan.windZones}
               onApplyPowers={updates => void applyPowerUpdates(updates)}
+              stepMeters={plan.pacingStepMeters}
+              onStepMetersChange={v => void setPacingStepMeters(v)}
             />
           </CollapsibleSection>
 
@@ -518,6 +699,16 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
           <div className="physics-panel-title pva-section-divider">🆚 Confronto con l'uscita reale</div>
 
           <CollapsibleSection title="🗺️ Mappa e altimetria uscita reale">
+            {sectionsWithRealPower > 0 && (
+              <label
+                className="stream-toggle"
+                style={{ marginBottom: '0.6rem', display: 'inline-flex' }}
+                title="Mostra, al posto della linea pianificata, la velocità che il modello predice usando la potenza REALE media di ogni sezione — per vedere dove il modello fisico sovrastima/sottostima, isolato dalla scelta di pacing. Aggiorna anche la tabella e il riepilogo di 'Confronto per sezione' più sotto."
+              >
+                <input type="checkbox" checked={sectionsVerifyMode} onChange={e => setSectionsVerifyMode(e.target.checked)} />
+                🔍 Verifica dati ({sectionsWithRealPower} sezioni con potenza reale)
+              </label>
+            )}
             <div className="gara-zone">
               <RouteMap
                 points={display.points}
@@ -542,7 +733,11 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
                   onAddBreakpoint={noop}
                   onRemoveBreakpoint={noop}
                   windZones={plan.windZones}
-                  plannedPowerSeries={plannedPowerSeries}
+                  plannedPowerSeries={displayPowerSeries}
+                  plannedSpeedSeries={displaySpeedSeries}
+                  plannedPowerLabel={sectionsVerifyMode ? 'verificata (potenza reale)' : 'pianificata'}
+                  plannedSpeedLabel={sectionsVerifyMode ? 'verificata (potenza reale)' : 'pianificata'}
+                  microBoundariesKm={NO_MICRO_BOUNDARIES}
                 />
               </div>
             </div>
@@ -601,11 +796,17 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
 
           <CollapsibleSection title="📊 Confronto per sezione">
             <div className="physics-panel">
+            {sectionsWithRealPower > 0 && (
+              <label className="stream-toggle" style={{ marginBottom: '0.6rem', display: 'inline-flex' }}>
+                <input type="checkbox" checked={sectionsVerifyMode} onChange={e => setSectionsVerifyMode(e.target.checked)} />
+                🔍 Verifica dati ({sectionsWithRealPower} sezioni con potenza reale) — stesso toggle del grafico sopra
+              </label>
+            )}
             {summary && (
               <div className="pva-summary-grid">
                 <div className="pva-summary-header">
                   <span></span>
-                  <span>Pian.</span>
+                  <span>{sectionsVerifyMode ? 'Verif.' : 'Pian.'}</span>
                   <span>Reale</span>
                   <span>Δ</span>
                 </div>
@@ -636,19 +837,19 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
                     <th>#</th>
                     <th>Sezione</th>
                     <th>Distanza</th>
-                    <th>Velocità pian.</th>
+                    <th>Velocità {sectionsVerifyMode ? 'verif.' : 'pian.'}</th>
                     <th>Velocità reale</th>
                     <th>Δ vel.</th>
-                    <th>Potenza pian.</th>
+                    <th>Potenza {sectionsVerifyMode ? 'verif.' : 'pian.'}</th>
                     <th>Potenza reale</th>
                     <th>Δ pot.</th>
-                    <th>Tempo pian.</th>
+                    <th>Tempo {sectionsVerifyMode ? 'verif.' : 'pian.'}</th>
                     <th>Tempo reale</th>
                     <th>Δ tempo</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map(r => (
+                  {displayRows.map(r => (
                     <tr key={r.index}>
                       <td>{r.index}</td>
                       <td>{r.label ?? `Sezione ${r.index}`}</td>
@@ -675,32 +876,56 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
             defaultOpen={false}
             open={microOpen}
             onToggle={setMicroOpen}
-            collapsedHint="Lo stesso confronto sopra, ma su una griglia automatica ogni X metri invece che sulle sezioni del piano — utile per individuare punti precisi dove la previsione si discosta dai dati reali."
+            collapsedHint="Lo stesso confronto sopra, ma sulla griglia fine dell'ottimizzatore di pacing (stesso passo in metri) invece che sulle sezioni del piano — utile per individuare punti precisi dove la previsione si discosta dai dati reali."
           >
             <div className="physics-panel pva-micro-panel">
                 <div className="pva-micro-controls">
-                  <span>Passo:</span>
-                  {MICRO_STEP_OPTIONS.map(step => (
-                    <button
-                      key={step}
-                      type="button"
-                      className={`btn btn-sm ghost${microStepKm === step ? ' active' : ''}`}
-                      onClick={() => setMicroStepKm(step)}
-                    >
-                      {step < 1 ? `${step * 1000} m` : `${step} km`}
-                    </button>
-                  ))}
                   <span className="pva-micro-active-label">
-                    → in uso: {microStepKm < 1 ? `${microStepKm * 1000} m` : `${microStepKm} km`} · {microGrid.length} microsezioni
+                    Passo: {microStepKm < 1 ? `${Math.round(microStepKm * 1000)} m` : `${microStepKm} km`} (dall'ottimizzatore di pacing, sezione sopra) · {microGrid.length} microsezioni
                   </span>
+                  {microSectionsWithRealPower > 0 && (
+                    <label className="stream-toggle" style={{ marginLeft: '1rem' }} title="Mostra, al posto della linea pianificata, la velocità che il modello predice usando la potenza REALE registrata in ogni microsezione — per vedere dove il modello fisico sovrastima/sottostima, isolato dalla scelta di pacing.">
+                      <input type="checkbox" checked={microVerifyMode} onChange={e => setMicroVerifyMode(e.target.checked)} />
+                      🔍 Verifica dati ({microSectionsWithRealPower} microsezioni con potenza reale)
+                    </label>
+                  )}
                 </div>
+
+                {microSummary && (
+                  <div className="pva-summary-grid">
+                    <div className="pva-summary-header">
+                      <span></span>
+                      <span>{microVerifyMode ? 'Verif.' : 'Pian.'}</span>
+                      <span>Reale</span>
+                      <span>Δ</span>
+                    </div>
+                    <div className="pva-summary-row">
+                      <span className="pva-summary-label">Velocità</span>
+                      <span className="pva-summary-val">{microSummary.plannedSpeedKmh.toFixed(1)} km/h</span>
+                      <span className="pva-summary-val">{microSummary.actualSpeedKmh != null ? `${microSummary.actualSpeedKmh.toFixed(1)} km/h` : '—'}</span>
+                      {deltaBadge(microSummary.deltaSpeedPct, '%')}
+                    </div>
+                    <div className="pva-summary-row">
+                      <span className="pva-summary-label">Potenza</span>
+                      <span className="pva-summary-val">{Math.round(microSummary.plannedPowerWatts)} W</span>
+                      <span className="pva-summary-val">{microSummary.actualPowerWatts != null ? `${Math.round(microSummary.actualPowerWatts)} W` : '—'}</span>
+                      {deltaBadge(microSummary.deltaPowerPct, '%')}
+                    </div>
+                    <div className="pva-summary-row">
+                      <span className="pva-summary-label">Tempo</span>
+                      <span className="pva-summary-val">{formatTime(microSummary.plannedTimeH)}</span>
+                      <span className="pva-summary-val">{microSummary.actualTimeHoursTotal != null ? formatTime(microSummary.actualTimeHoursTotal) : '—'}</span>
+                      {deltaTimeBadge(microSummary.deltaTimeHours)}
+                    </div>
+                  </div>
+                )}
 
                 <div className="gara-zone">
                   <RouteMap
                     points={display.points}
                     smoothingRadiusMeters={microSmoothingRadiusMeters}
                     hoverPoint={microHoverPoint}
-                    breakpoints={[]}
+                    breakpoints={NO_BREAKPOINTS}
                     addMode={false}
                     onAddBreakpoint={noop}
                     onRemoveBreakpoint={noop}
@@ -715,12 +940,15 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
                       smoothingRadiusMeters={microSmoothingRadiusMeters}
                       onSmoothingChange={setMicroSmoothingRadiusMeters}
                       onHoverPoint={setMicroHoverPoint}
-                      breakpoints={[]}
+                      breakpoints={NO_BREAKPOINTS}
                       addMode={false}
                       onAddBreakpoint={noop}
                       onRemoveBreakpoint={noop}
                       windZones={plan.windZones}
-                      plannedPowerSeries={microPlannedPowerSeries}
+                      plannedPowerSeries={microDisplayPowerSeries}
+                      plannedSpeedSeries={microDisplaySpeedSeries}
+                      plannedPowerLabel={microVerifyMode ? 'verificata (potenza reale)' : 'pianificata'}
+                      plannedSpeedLabel={microVerifyMode ? 'verificata (potenza reale)' : 'pianificata'}
                       microBoundariesKm={microBoundariesKm}
                     />
                   </div>
@@ -733,16 +961,16 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
                         <th>#</th>
                         <th>Tratto (km)</th>
                         <th>Pend.</th>
-                        <th>Vel. pian.</th>
+                        <th>Vel. {microVerifyMode ? 'verif.' : 'pian.'}</th>
                         <th>Vel. reale</th>
                         <th>Δ vel.</th>
-                        <th>Pot. pian.</th>
+                        <th>Pot. {microVerifyMode ? 'verif.' : 'pian.'}</th>
                         <th>Pot. reale</th>
                         <th>Δ pot.</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {microGrid.map((p, i) => {
+                      {microDisplayGrid.map((p, i) => {
                         const deltaSpeedPct = p.actualSpeedKmh != null && p.plannedSpeedKmh > 0 ? ((p.actualSpeedKmh - p.plannedSpeedKmh) / p.plannedSpeedKmh) * 100 : null;
                         const deltaPowerPct =
                           p.actualPowerWatts != null && p.plannedPowerWatts > 0 ? ((p.actualPowerWatts - p.plannedPowerWatts) / p.plannedPowerWatts) * 100 : null;

@@ -73,7 +73,13 @@ export const SectionPlanSchema = EntityBaseSchema.extend({
    * delle zone vento (senza un'ora di partenza nota, un campione vento a un'ora precisa
    * non si può collocare sul percorso, si ricade sul valore statico della zona).
    */
-  plannedStartTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().default(null)
+  plannedStartTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().default(null),
+  /**
+   * Passo (metri) della griglia fine usata dall'ottimizzatore di pacing ("Ottimizza completo").
+   * Unica fonte di verità: anche il confronto a microsezioni (Tab 3) usa questo stesso valore,
+   * per evitare che i due si disallineino mostrando griglie diverse da quella su cui si ottimizza.
+   */
+  pacingStepMeters: z.number().min(50).max(5000).default(100)
 })
   .refine(val => startsAndEndsFixed(val.breakpoints), {
     message: 'Il primo breakpoint deve essere "start" e l\'ultimo "finish".'
@@ -98,7 +104,8 @@ export const CreateSectionPlanInputSchema = z
     defaultPowerWatts: z.number().min(0).max(3000).default(250),
     breakpoints: z.array(BreakpointSchema).min(2),
     windZones: z.array(WindZoneBoundarySchema).default([]),
-    plannedStartTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().default(null)
+    plannedStartTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().default(null),
+    pacingStepMeters: z.number().min(50).max(5000).default(100)
   })
   .refine(val => startsAndEndsFixed(val.breakpoints), {
     message: 'Il primo breakpoint deve essere "start" e l\'ultimo "finish".'

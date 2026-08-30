@@ -13,6 +13,13 @@ interface PacingOptimizerPanelProps {
   totalDistanceKm: number;
   windZones: WindZoneBoundary[];
   onApplyPowers: (updates: Map<string, number>) => void;
+  /**
+   * Passo (m) della griglia fine — persistito nel piano (`SectionPlan.pacingStepMeters`),
+   * non più stato locale del pannello: è l'unica fonte di verità condivisa anche col
+   * confronto a microsezioni (Tab 3), che deve mostrare esattamente questa stessa griglia.
+   */
+  stepMeters: number;
+  onStepMetersChange: (stepMeters: number) => void;
 }
 
 interface FineGridResult {
@@ -20,12 +27,20 @@ interface FineGridResult {
   powers: number[];
 }
 
-export function PacingOptimizerPanel({ breakpoints, processedPoints, physicsParams, totalDistanceKm, windZones, onApplyPowers }: PacingOptimizerPanelProps) {
+export function PacingOptimizerPanel({
+  breakpoints,
+  processedPoints,
+  physicsParams,
+  totalDistanceKm,
+  windZones,
+  onApplyPowers,
+  stepMeters,
+  onStepMetersChange
+}: PacingOptimizerPanelProps) {
   const [targetAvg, setTargetAvg] = useState(220);
   const [targetNp, setTargetNp] = useState<number | ''>('');
   const [minPower, setMinPower] = useState(100);
   const [maxPower, setMaxPower] = useState(400);
-  const [stepMeters, setStepMeters] = useState(250);
   const [resultText, setResultText] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [finePlan, setFinePlan] = useState<FineGridResult | null>(null);
@@ -119,7 +134,7 @@ export function PacingOptimizerPanel({ breakpoints, processedPoints, physicsPara
         </label>
         <label className="physics-field">
           <span>Step griglia fine (m)</span>
-          <NumberField min={50} step={50} value={stepMeters} onCommit={setStepMeters} />
+          <NumberField min={50} step={50} value={stepMeters} onCommit={onStepMetersChange} />
         </label>
       </div>
       <div className="pacing-actions">
