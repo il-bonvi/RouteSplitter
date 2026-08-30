@@ -8,6 +8,7 @@ import { buildActivityDisplay, remapElevationFromRoute } from '../activity/build
 import { buildCdaSamples } from '../activity/activitySamples.js';
 import { computePlanVsActualSections, computePlanVsActualFineGrid, padSeriesToRouteEdges, type PlanVsActualSectionRow } from '../lib/planVsActual.js';
 import { formatTime, formatDeltaTime } from '../lib/formatTime.js';
+import { planVsActualSectionsToCsv, planVsActualFineGridToCsv, downloadTextFile } from '../lib/exportCsv.js';
 import { RouteMap, type MapWindControlData } from './RouteMap.js';
 import { ActivityElevationChart } from './ActivityElevationChart.js';
 import { ElevationChart } from './ElevationChart.js';
@@ -95,6 +96,9 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
   const [routePoints, setRoutePoints] = useState<ProcessedPoint[] | null>(null);
 
   const selectedRoute = routes.find(r => r.id === selectedRouteId) ?? null;
+  // Nome file sicuro per gli export CSV (F3.3): stessa sanificazione usata per l'export JSON
+  // del piano in RouteSplitterApp.tsx, per coerenza fra i vari export dell'app.
+  const safeRouteName = (selectedRoute?.name.trim().replace(/[^a-z0-9\-_]+/gi, '_') || 'percorso').toLowerCase();
 
   const {
     plan,
@@ -773,6 +777,17 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
                 </div>
               </div>
 
+              <div className="pva-export-row">
+                <button
+                  type="button"
+                  className="btn btn-sm ghost"
+                  onClick={() => downloadTextFile(`confronto_sezioni_${safeRouteName}.csv`, planVsActualSectionsToCsv(rows), 'text/csv')}
+                  title="Esporta questa tabella (dati grezzi, non filtrati da 'Verifica dati') in CSV"
+                >
+                  ⬇️ Esporta CSV
+                </button>
+              </div>
+
               <div className="sections-table-wrap">
                 <table className="sections-table pva-sections-table">
                   <thead>
@@ -946,6 +961,17 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
                       microBoundariesKm={microBoundariesKm}
                     />
                   </div>
+                </div>
+
+                <div className="pva-export-row">
+                  <button
+                    type="button"
+                    className="btn btn-sm ghost"
+                    onClick={() => downloadTextFile(`confronto_microsezioni_${safeRouteName}.csv`, planVsActualFineGridToCsv(microGrid), 'text/csv')}
+                    title="Esporta questa tabella (dati grezzi, non filtrati da 'Verifica dati', include pendenza e quota per bin) in CSV"
+                  >
+                    ⬇️ Esporta CSV
+                  </button>
                 </div>
 
                 <div className="sections-table-wrap pva-micro-table-wrap">

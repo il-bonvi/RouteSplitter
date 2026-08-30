@@ -1646,6 +1646,12 @@ body {
 .pva-collapsible-content > .physics-panel:not(:first-child) {
   margin-top: 14px;
 }
+.pva-export-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 0.5rem;
+}
+
 .pva-summary-grid {
   display: grid;
   grid-template-columns: 90px repeat(3, 1fr);
