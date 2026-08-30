@@ -6,8 +6,8 @@
 > documento deve bastare da solo a ricostruire tutto il contesto: cosa esiste, perché è stato
 > deciso così, cosa manca, cosa fare dopo.
 
-**Ultimo aggiornamento:** 2026-08-30d
-**Fase attuale:** **F3.9 — riepilogo mancante nel pannello microsezioni**: il pannello "Confronto a microsezioni" aveva la tabella di dettaglio ma non il box di riepilogo (Velocità/Potenza/Tempo pesati sul tempo, con delta) presente in "Confronto per sezione" — le due viste dovevano avere lo stesso layout, non solo la stessa tabella. Aggiunto `microSummary`, stesso identico calcolo del riepilogo sezioni (media pesata sul tempo), derivato da `microDisplayGrid` quindi già coerente col toggle "Verifica dati". 211 test verdi (nessuna nuova unità richiesta, puro wiring UI), typecheck/build puliti.
+**Ultimo aggiornamento:** 2026-08-30e
+**Fase attuale:** **F3.10 — sezioni custom uniformate al layout delle microsezioni (una card sola)**: "🗺️ Mappa e altimetria uscita reale" e "📊 Confronto per sezione" (prima due card separate, con lo stesso toggle "Verifica dati" duplicato in entrambe) unite in un'unica card "📊 Confronto per sezione (piano manuale)" — toggle → riepilogo → mappa+grafico → tabella, esattamente l'ordine già usato per "Confronto a microsezioni". "💨 Affidabilità vento pianificato" spostata sotto, come card indipendente, subito dopo il blocco unificato. Le due viste (sezioni custom e microsezioni) hanno ora lo stesso identico layout. 211 test verdi (nessuna nuova unità richiesta, riorganizzazione JSX pura), typecheck/build puliti.
 
 ---
 

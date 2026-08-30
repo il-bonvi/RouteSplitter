@@ -698,47 +698,118 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
         <>
           <div className="physics-panel-title pva-section-divider">🆚 Confronto con l'uscita reale</div>
 
-          <CollapsibleSection title="🗺️ Mappa e altimetria uscita reale">
-            {sectionsWithRealPower > 0 && (
-              <label
-                className="stream-toggle"
-                style={{ marginBottom: '0.6rem', display: 'inline-flex' }}
-                title="Mostra, al posto della linea pianificata, la velocità che il modello predice usando la potenza REALE media di ogni sezione — per vedere dove il modello fisico sovrastima/sottostima, isolato dalla scelta di pacing. Aggiorna anche la tabella e il riepilogo di 'Confronto per sezione' più sotto."
-              >
-                <input type="checkbox" checked={sectionsVerifyMode} onChange={e => setSectionsVerifyMode(e.target.checked)} />
-                🔍 Verifica dati ({sectionsWithRealPower} sezioni con potenza reale)
-              </label>
-            )}
-            <div className="gara-zone">
-              <RouteMap
-                points={display.points}
-                smoothingRadiusMeters={activitySmoothingRadiusMeters}
-                hoverPoint={activityHoverPoint}
-                breakpoints={plan.breakpoints}
-                addMode={false}
-                onAddBreakpoint={noop}
-                onRemoveBreakpoint={noop}
-                windControl={null}
-                windZones={plan.windZones}
-                totalDistanceKm={display.distanceKm}
-              />
-              <div className="panel">
-                <ActivityElevationChart
+          <CollapsibleSection title="📊 Confronto per sezione (piano manuale)">
+            <div className="physics-panel pva-micro-panel">
+              {sectionsWithRealPower > 0 && (
+                <label
+                  className="stream-toggle"
+                  style={{ marginBottom: '0.6rem', display: 'inline-flex' }}
+                  title="Mostra, al posto della linea/colonna pianificata, la velocità che il modello predice usando la potenza REALE media di ogni sezione — per vedere dove il modello fisico sovrastima/sottostima, isolato dalla scelta di pacing."
+                >
+                  <input type="checkbox" checked={sectionsVerifyMode} onChange={e => setSectionsVerifyMode(e.target.checked)} />
+                  🔍 Verifica dati ({sectionsWithRealPower} sezioni con potenza reale)
+                </label>
+              )}
+
+              {summary && (
+                <div className="pva-summary-grid">
+                  <div className="pva-summary-header">
+                    <span></span>
+                    <span>{sectionsVerifyMode ? 'Verif.' : 'Pian.'}</span>
+                    <span>Reale</span>
+                    <span>Δ</span>
+                  </div>
+                  <div className="pva-summary-row">
+                    <span className="pva-summary-label">Velocità</span>
+                    <span className="pva-summary-val">{summary.plannedSpeedKmh.toFixed(1)} km/h</span>
+                    <span className="pva-summary-val">{summary.actualSpeedKmh != null ? `${summary.actualSpeedKmh.toFixed(1)} km/h` : '—'}</span>
+                    {deltaBadge(summary.deltaSpeedPct, '%')}
+                  </div>
+                  <div className="pva-summary-row">
+                    <span className="pva-summary-label">Potenza</span>
+                    <span className="pva-summary-val">{Math.round(summary.plannedPowerWatts)} W</span>
+                    <span className="pva-summary-val">{summary.actualPowerWatts != null ? `${Math.round(summary.actualPowerWatts)} W` : '—'}</span>
+                    {deltaBadge(summary.deltaPowerPct, '%')}
+                  </div>
+                  <div className="pva-summary-row">
+                    <span className="pva-summary-label">Tempo</span>
+                    <span className="pva-summary-val">{formatTime(summary.plannedTimeH)}</span>
+                    <span className="pva-summary-val">{summary.actualTimeHoursTotal != null ? formatTime(summary.actualTimeHoursTotal) : '—'}</span>
+                    {deltaTimeBadge(summary.deltaTimeHours)}
+                  </div>
+                </div>
+              )}
+
+              <div className="gara-zone">
+                <RouteMap
                   points={display.points}
                   smoothingRadiusMeters={activitySmoothingRadiusMeters}
-                  onSmoothingChange={setActivitySmoothingRadiusMeters}
-                  onHoverPoint={setActivityHoverPoint}
+                  hoverPoint={activityHoverPoint}
                   breakpoints={plan.breakpoints}
                   addMode={false}
                   onAddBreakpoint={noop}
                   onRemoveBreakpoint={noop}
+                  windControl={null}
                   windZones={plan.windZones}
-                  plannedPowerSeries={displayPowerSeries}
-                  plannedSpeedSeries={displaySpeedSeries}
-                  plannedPowerLabel={sectionsVerifyMode ? 'verificata (potenza reale)' : 'pianificata'}
-                  plannedSpeedLabel={sectionsVerifyMode ? 'verificata (potenza reale)' : 'pianificata'}
-                  microBoundariesKm={NO_MICRO_BOUNDARIES}
+                  totalDistanceKm={display.distanceKm}
                 />
+                <div className="panel">
+                  <ActivityElevationChart
+                    points={display.points}
+                    smoothingRadiusMeters={activitySmoothingRadiusMeters}
+                    onSmoothingChange={setActivitySmoothingRadiusMeters}
+                    onHoverPoint={setActivityHoverPoint}
+                    breakpoints={plan.breakpoints}
+                    addMode={false}
+                    onAddBreakpoint={noop}
+                    onRemoveBreakpoint={noop}
+                    windZones={plan.windZones}
+                    plannedPowerSeries={displayPowerSeries}
+                    plannedSpeedSeries={displaySpeedSeries}
+                    plannedPowerLabel={sectionsVerifyMode ? 'verificata (potenza reale)' : 'pianificata'}
+                    plannedSpeedLabel={sectionsVerifyMode ? 'verificata (potenza reale)' : 'pianificata'}
+                    microBoundariesKm={NO_MICRO_BOUNDARIES}
+                  />
+                </div>
+              </div>
+
+              <div className="sections-table-wrap">
+                <table className="sections-table pva-sections-table">
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>Sezione</th>
+                      <th>Distanza</th>
+                      <th>Velocità {sectionsVerifyMode ? 'verif.' : 'pian.'}</th>
+                      <th>Velocità reale</th>
+                      <th>Δ vel.</th>
+                      <th>Potenza {sectionsVerifyMode ? 'verif.' : 'pian.'}</th>
+                      <th>Potenza reale</th>
+                      <th>Δ pot.</th>
+                      <th>Tempo {sectionsVerifyMode ? 'verif.' : 'pian.'}</th>
+                      <th>Tempo reale</th>
+                      <th>Δ tempo</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {displayRows.map(r => (
+                      <tr key={r.index}>
+                        <td>{r.index}</td>
+                        <td>{r.label ?? `Sezione ${r.index}`}</td>
+                        <td>{r.distanceKm.toFixed(1)} km</td>
+                        <td>{r.plannedSpeedKmh.toFixed(1)} km/h</td>
+                        <td>{r.actualSpeedKmh != null ? `${r.actualSpeedKmh.toFixed(1)} km/h` : '—'}</td>
+                        <td>{deltaBadge(r.deltaSpeedPct, '%')}</td>
+                        <td>{Math.round(r.plannedPowerWatts)} W</td>
+                        <td>{r.actualPowerWatts != null ? `${Math.round(r.actualPowerWatts)} W` : '—'}</td>
+                        <td>{deltaBadge(r.deltaPowerPct, '%')}</td>
+                        <td>{formatTime(r.plannedTimeHours)}</td>
+                        <td>{r.actualTimeHours != null ? formatTime(r.actualTimeHours) : '—'}</td>
+                        <td>{deltaTimeBadge(r.deltaTimeHours)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             </div>
           </CollapsibleSection>
@@ -791,83 +862,6 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
                 </table>
               </div>
             )}
-            </div>
-          </CollapsibleSection>
-
-          <CollapsibleSection title="📊 Confronto per sezione">
-            <div className="physics-panel">
-            {sectionsWithRealPower > 0 && (
-              <label className="stream-toggle" style={{ marginBottom: '0.6rem', display: 'inline-flex' }}>
-                <input type="checkbox" checked={sectionsVerifyMode} onChange={e => setSectionsVerifyMode(e.target.checked)} />
-                🔍 Verifica dati ({sectionsWithRealPower} sezioni con potenza reale) — stesso toggle del grafico sopra
-              </label>
-            )}
-            {summary && (
-              <div className="pva-summary-grid">
-                <div className="pva-summary-header">
-                  <span></span>
-                  <span>{sectionsVerifyMode ? 'Verif.' : 'Pian.'}</span>
-                  <span>Reale</span>
-                  <span>Δ</span>
-                </div>
-                <div className="pva-summary-row">
-                  <span className="pva-summary-label">Velocità</span>
-                  <span className="pva-summary-val">{summary.plannedSpeedKmh.toFixed(1)} km/h</span>
-                  <span className="pva-summary-val">{summary.actualSpeedKmh != null ? `${summary.actualSpeedKmh.toFixed(1)} km/h` : '—'}</span>
-                  {deltaBadge(summary.deltaSpeedPct, '%')}
-                </div>
-                <div className="pva-summary-row">
-                  <span className="pva-summary-label">Potenza</span>
-                  <span className="pva-summary-val">{Math.round(summary.plannedPowerWatts)} W</span>
-                  <span className="pva-summary-val">{summary.actualPowerWatts != null ? `${Math.round(summary.actualPowerWatts)} W` : '—'}</span>
-                  {deltaBadge(summary.deltaPowerPct, '%')}
-                </div>
-                <div className="pva-summary-row">
-                  <span className="pva-summary-label">Tempo</span>
-                  <span className="pva-summary-val">{formatTime(summary.plannedTimeH)}</span>
-                  <span className="pva-summary-val">{summary.actualTimeHoursTotal != null ? formatTime(summary.actualTimeHoursTotal) : '—'}</span>
-                  {deltaTimeBadge(summary.deltaTimeHours)}
-                </div>
-              </div>
-            )}
-            <div className="sections-table-wrap">
-              <table className="sections-table pva-sections-table">
-                <thead>
-                  <tr>
-                    <th>#</th>
-                    <th>Sezione</th>
-                    <th>Distanza</th>
-                    <th>Velocità {sectionsVerifyMode ? 'verif.' : 'pian.'}</th>
-                    <th>Velocità reale</th>
-                    <th>Δ vel.</th>
-                    <th>Potenza {sectionsVerifyMode ? 'verif.' : 'pian.'}</th>
-                    <th>Potenza reale</th>
-                    <th>Δ pot.</th>
-                    <th>Tempo {sectionsVerifyMode ? 'verif.' : 'pian.'}</th>
-                    <th>Tempo reale</th>
-                    <th>Δ tempo</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {displayRows.map(r => (
-                    <tr key={r.index}>
-                      <td>{r.index}</td>
-                      <td>{r.label ?? `Sezione ${r.index}`}</td>
-                      <td>{r.distanceKm.toFixed(1)} km</td>
-                      <td>{r.plannedSpeedKmh.toFixed(1)} km/h</td>
-                      <td>{r.actualSpeedKmh != null ? `${r.actualSpeedKmh.toFixed(1)} km/h` : '—'}</td>
-                      <td>{deltaBadge(r.deltaSpeedPct, '%')}</td>
-                      <td>{Math.round(r.plannedPowerWatts)} W</td>
-                      <td>{r.actualPowerWatts != null ? `${Math.round(r.actualPowerWatts)} W` : '—'}</td>
-                      <td>{deltaBadge(r.deltaPowerPct, '%')}</td>
-                      <td>{formatTime(r.plannedTimeHours)}</td>
-                      <td>{r.actualTimeHours != null ? formatTime(r.actualTimeHours) : '—'}</td>
-                      <td>{deltaTimeBadge(r.deltaTimeHours)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
             </div>
           </CollapsibleSection>
 
