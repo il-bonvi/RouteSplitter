@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { sectionsToCsv, planVsActualSectionsToCsv, planVsActualFineGridToCsv } from '../../src/lib/exportCsv.js';
+import { sectionsToCsv, planVsActualSectionsToCsv, planVsActualFineGridToCsv, energyBalanceToCsv } from '../../src/lib/exportCsv.js';
 import { computeSections, processRoute, powerFromSpeed, type SectionBreakpoint, type PhysicsParams, type CdaSample } from '@physics-core';
 import { computePlanVsActualSections, computePlanVsActualFineGrid } from '../../src/lib/planVsActual.js';
+import { computeActivityEnergyBalance } from '../../src/lib/energyBalance.js';
 import type { ActivityDisplayPoint } from '../../src/activity/buildActivityDisplay.js';
 
 const params: PhysicsParams = {
@@ -130,5 +131,50 @@ describe('planVsActualFineGridToCsv', () => {
     const csv = planVsActualFineGridToCsv(grid);
     expect(csv).not.toContain('null');
     expect(csv).not.toContain('undefined');
+  });
+
+  it('segnala "SI" nella colonna Probabile frenata per un bin di frenata evidente', () => {
+    const descPoints = processRoute(
+      Array.from({ length: 200 }, (_, i) => ({ lat: 45.0 + (i / 199) * (20 / 111), lon: 11.0, ele: 300 - i * 1.2 }))
+    ).points;
+    const breakpoints: SectionBreakpoint[] = [
+      { id: 'start', distKm: 0, fixed: 'start', sectionLabel: null, speedKmh: null, powerWatts: null },
+      { id: 'finish', distKm: 20, fixed: 'finish', sectionLabel: null, speedKmh: 30, powerWatts: null }
+    ];
+    // Attività sintetica lenta (24 km/h) ma con potenza alta su un percorso in discesa
+    // ripida: la velocità "verificata" (dalla potenza reale) risulta molto più alta della
+    // reale → il primo bin deve scattare come probabile frenata.
+    const samples: CdaSample[] = Array.from({ length: 50 }, (_, i) => ({ speedMS: 24 / 3.6, powerW: 300, gradientPct: -8, distKm: (i / 49) * 2 }));
+    const grid = computePlanVsActualFineGrid(breakpoints, descPoints, params, 'speed', 250, undefined, 20, samples, 1);
+    const csv = planVsActualFineGridToCsv(grid);
+    expect(csv).toContain('SI');
+  });
+});
+
+describe('energyBalanceToCsv', () => {
+  it('produce una riga di header + una riga per intervallo', () => {
+    const speedKmh = 30;
+    const speedMS = speedKmh / 3.6;
+    const powerW = powerFromSpeed(speedMS, 0, params);
+    const points: ActivityDisplayPoint[] = Array.from({ length: 10 }, (_, i) => ({
+      lat: 45,
+      lon: 11,
+      ele: 100,
+      dist: i * speedMS,
+      gradient: 0,
+      powerW,
+      speedKmh,
+      timeSec: i
+    }));
+    const rows = computeActivityEnergyBalance(points, params, { smoothingSeconds: 0 });
+    const csv = energyBalanceToCsv(rows);
+    const lines = csv.split('\n');
+    expect(lines).toHaveLength(1 + rows.length);
+    expect(lines[0]).toContain('Residuo (J');
+  });
+
+  it('con nessuna riga produce solo l\'header', () => {
+    const csv = energyBalanceToCsv([]);
+    expect(csv.split('\n')).toHaveLength(1);
   });
 });

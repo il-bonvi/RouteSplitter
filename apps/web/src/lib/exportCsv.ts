@@ -1,5 +1,7 @@
 import type { SectionResult } from '@physics-core';
 import type { PlanVsActualSectionRow, PlanVsActualFinePoint } from './planVsActual.js';
+import { isLikelyBraking } from './planVsActual.js';
+import type { EnergyBalanceRow } from '@physics-core';
 
 function csvCell(value: string | number): string {
   const s = String(value);
@@ -120,7 +122,8 @@ export function planVsActualFineGridToCsv(points: PlanVsActualFinePoint[]): stri
     'Vel. verificata - pot.reale (km/h)',
     'Delta vel. pian.-reale (km/h)',
     'Delta vel. pian.-reale (%)',
-    'Delta vel. verificata-reale (km/h)'
+    'Delta vel. verificata-reale (km/h)',
+    'Probabile frenata'
   ];
   const rows = points.map((p, i) => {
     const deltaAbs = p.actualSpeedKmh != null ? p.actualSpeedKmh - p.plannedSpeedKmh : null;
@@ -140,10 +143,52 @@ export function planVsActualFineGridToCsv(points: PlanVsActualFinePoint[]): stri
       csvNum(p.verifiedSpeedKmh),
       csvNum(deltaAbs),
       csvNum(deltaPct, 1),
-      csvNum(deltaVerified)
+      csvNum(deltaVerified),
+      isLikelyBraking(p) ? 'SI' : ''
     ];
   });
   return [header, ...rows].map(row => row.map(csvCell).join(',')).join('\n');
+}
+
+/**
+ * Export del bilancio energetico secondo-per-secondo (ipotesi inerzia, F3.3): a differenza
+ * degli export a bin (`planVsActualFineGridToCsv`), qui ogni riga è un intervallo fra due
+ * campioni consecutivi dell'attività reale (cadenza nativa del device, dopo smoothing
+ * temporale leggero) — abbastanza breve da non poter assumere l'equilibrio stazionario di
+ * forze. `residualJ`/`residualPowerW` isolano quanto dell'accelerazione/decelerazione reale
+ * NON è spiegato da pedalata+gravità+resistenze note: un residuo negativo forte e
+ * concentrato in discesa ripida è quasi certamente frenata (non un errore di modello).
+ */
+export function energyBalanceToCsv(rows: EnergyBalanceRow[]): string {
+  const header = [
+    'Tempo (s)',
+    'Distanza (km)',
+    'Δt (s)',
+    'Pendenza (%)',
+    'Velocità (km/h)',
+    'Potenza (W)',
+    'Pot. dissipativa aero+rotolamento (W)',
+    'Pot. gravità (W, +=salita)',
+    'ΔEC osservata (J)',
+    'ΔEC prevista dal bilancio (J)',
+    'Residuo (J, negativo=frenata o resistenza non modellata)',
+    'Residuo equivalente (W)'
+  ];
+  const dataRows = rows.map(r => [
+    r.timeSec.toFixed(1),
+    r.distKm.toFixed(3),
+    r.dtSec.toFixed(2),
+    r.gradientPct.toFixed(2),
+    r.speedKmh.toFixed(2),
+    Math.round(r.powerW),
+    Math.round(r.dissipativePowerW),
+    Math.round(r.gravPowerW),
+    Math.round(r.observedDeltaKeJ),
+    Math.round(r.predictedDeltaKeJ),
+    Math.round(r.residualJ),
+    Math.round(r.residualPowerW)
+  ]);
+  return [header, ...dataRows].map(row => row.map(csvCell).join(',')).join('\n');
 }
 
 export function downloadTextFile(filename: string, content: string, mimeType: string): void {

@@ -7,3 +7,4 @@ export * from './pacingOptimizer.js';
 export * from './sections.js';
 export * from './wind.js';
 export * from './cdaFromActivity.js';
+export * from './energyBalance.js';

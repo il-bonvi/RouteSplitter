@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computePlanVsActualSections, computePlanVsActualFineGrid, padSeriesToRouteEdges } from '../../src/lib/planVsActual.js';
+import { computePlanVsActualSections, computePlanVsActualFineGrid, padSeriesToRouteEdges, isLikelyBraking } from '../../src/lib/planVsActual.js';
 import { processRoute, powerFromSpeed, type SectionBreakpoint, type PhysicsParams, type CdaSample } from '@physics-core';
 import { DEFAULT_PHYSICS_PARAMS } from '@shared-schema';
 import type { ActivityDisplayPoint } from '../../src/activity/buildActivityDisplay.js';
@@ -231,5 +231,29 @@ describe('padSeriesToRouteEdges', () => {
 
   it('array vuoto resta vuoto', () => {
     expect(padSeriesToRouteEdges([], 10)).toEqual([]);
+  });
+});
+
+describe('isLikelyBraking', () => {
+  it('segnala un bin in discesa ripida dove il reale è molto sotto il previsto (dati reali 2026-08-30)', () => {
+    // Bin #1 del CSV "3 giorni trevigiana": grad -3.51%, verificata 60.25, reale 33.80.
+    expect(isLikelyBraking({ gradientPct: -3.51, actualSpeedKmh: 33.8, verifiedSpeedKmh: 60.25 })).toBe(true);
+  });
+
+  it('non segnala una discesa con scarto modesto (rumore normale, non frenata)', () => {
+    expect(isLikelyBraking({ gradientPct: -2, actualSpeedKmh: 44, verifiedSpeedKmh: 45 })).toBe(false);
+  });
+
+  it('non segnala mai una salita, a prescindere dallo scarto', () => {
+    expect(isLikelyBraking({ gradientPct: 5, actualSpeedKmh: 10, verifiedSpeedKmh: 30 })).toBe(false);
+  });
+
+  it('non segnala quando manca velocità reale o verificata', () => {
+    expect(isLikelyBraking({ gradientPct: -5, actualSpeedKmh: null, verifiedSpeedKmh: 40 })).toBe(false);
+    expect(isLikelyBraking({ gradientPct: -5, actualSpeedKmh: 20, verifiedSpeedKmh: null })).toBe(false);
+  });
+
+  it('il piano (pendenza ~0) non viene mai segnalato', () => {
+    expect(isLikelyBraking({ gradientPct: 0, actualSpeedKmh: 5, verifiedSpeedKmh: 40 })).toBe(false);
   });
 });

@@ -6,9 +6,10 @@ import { useSectionPlan } from '../hooks/useSectionPlan.js';
 import { parseActivityText, type ActivityTrackPoint } from '../activity/parseActivityFile.js';
 import { buildActivityDisplay, remapElevationFromRoute } from '../activity/buildActivityDisplay.js';
 import { buildCdaSamples } from '../activity/activitySamples.js';
-import { computePlanVsActualSections, computePlanVsActualFineGrid, padSeriesToRouteEdges, type PlanVsActualSectionRow } from '../lib/planVsActual.js';
+import { computePlanVsActualSections, computePlanVsActualFineGrid, padSeriesToRouteEdges, isLikelyBraking, type PlanVsActualSectionRow } from '../lib/planVsActual.js';
 import { formatTime, formatDeltaTime } from '../lib/formatTime.js';
-import { planVsActualSectionsToCsv, planVsActualFineGridToCsv, downloadTextFile } from '../lib/exportCsv.js';
+import { planVsActualSectionsToCsv, planVsActualFineGridToCsv, energyBalanceToCsv, downloadTextFile } from '../lib/exportCsv.js';
+import { computeActivityEnergyBalance } from '../lib/energyBalance.js';
 import { RouteMap, type MapWindControlData } from './RouteMap.js';
 import { ActivityElevationChart } from './ActivityElevationChart.js';
 import { ElevationChart } from './ElevationChart.js';
@@ -154,6 +155,15 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
   const [microHoverPoint, setMicroHoverPoint] = useState<{ lat: number; lon: number } | null>(null);
   const [microSmoothingRadiusMeters, setMicroSmoothingRadiusMeters] = useState(50);
 
+  // Bilancio energetico secondo-per-secondo (ipotesi inerzia, 2026-08-30): a differenza del
+  // confronto a bin sopra, qui NON si assume equilibrio stazionario — si verifica se potenza
+  // pedalata meno resistenze note spiega la variazione di velocità REALE misurata a cadenza
+  // nativa. Calcolato solo a pannello aperto (stesso gating di microGrid: nessun costo se
+  // non richiesto), indipendente dal passo microsezioni (qui la "griglia" è temporale, non
+  // spaziale). Vedi `src/lib/energyBalance.ts` per il perché dei default.
+  const [energyOpen, setEnergyOpen] = useState(false);
+  const [energySmoothingSeconds, setEnergySmoothingSeconds] = useState(3);
+
   useEffect(() => {
     void store.routes.listByAthlete(null).then(setRoutes);
   }, [store]);
@@ -234,6 +244,30 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
   }, [activityPoints, elevationSource, routePoints]);
 
   const display = useMemo(() => (effectiveActivityPoints ? buildActivityDisplay(effectiveActivityPoints) : null), [effectiveActivityPoints]);
+
+  // Bilancio energetico secondo-per-secondo (ipotesi inerzia, 2026-08-30): a differenza del
+  // confronto a bin sopra, qui NON si assume equilibrio stazionario — si verifica se potenza
+  // pedalata meno resistenze note spiega la variazione di velocità REALE misurata a cadenza
+  // nativa. Calcolato solo a pannello aperto (stesso gating di microGrid: nessun costo se
+  // non richiesto), indipendente dal passo microsezioni (qui la "griglia" è temporale, non
+  // spaziale). Vedi `src/lib/energyBalance.ts` per il perché dei default.
+  const energyBalanceRows = useMemo(() => {
+    if (!energyOpen || !display) return [];
+    return computeActivityEnergyBalance(display.points, physicsParams, { smoothingSeconds: energySmoothingSeconds });
+  }, [energyOpen, display, physicsParams, energySmoothingSeconds]);
+
+  // Riepilogo minimo per capire a colpo d'occhio se vale la pena scaricare il CSV: mediana
+  // del residuo (robusta a poche frenate estreme che sposterebbero molto la media) e quota
+  // di intervalli con un residuo fortemente negativo (soglia -50W, indicativa: energia persa
+  // che nessuna resistenza nota spiega — frenata quasi certa, non errore di modello).
+  const energySummary = useMemo(() => {
+    if (energyBalanceRows.length === 0) return null;
+    const sorted = [...energyBalanceRows].map(r => r.residualPowerW).sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)]!;
+    const likelyBrakingCount = sorted.filter(w => w < -50).length;
+    return { n: energyBalanceRows.length, medianResidualW: median, likelyBrakingCount };
+  }, [energyBalanceRows]);
+
   const cdaBuilt = useMemo(() => (effectiveActivityPoints ? buildCdaSamples(effectiveActivityPoints) : null), [effectiveActivityPoints]);
 
   const rows = useMemo<PlanVsActualSectionRow[]>(() => {
@@ -389,6 +423,11 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
   const microDisplayPowerSeries = microVerifyMode ? microVerifiedPowerSeries : microPlannedPowerSeries;
   const microDisplaySpeedSeries = microVerifyMode ? microVerifiedSpeedSeries : microPlannedSpeedSeries;
   const microSectionsWithRealPower = useMemo(() => microGrid.filter(p => p.actualPowerWatts != null).length, [microGrid]);
+  // Bin segnalati come "probabile frenata" (F3.13): non un errore di modello, il rider sta
+  // decelerando volontariamente (curve, fondo tecnico) — vedi isLikelyBraking in planVsActual.ts
+  // per la soglia. Calcolato su microGrid (dati grezzi), non su microDisplayGrid, perché il
+  // flag deve restare lo stesso indipendentemente dal toggle "Verifica dati" della tabella.
+  const microBrakingCount = useMemo(() => microGrid.filter(isLikelyBraking).length, [microGrid]);
   // BUG SEGNALATO: la tabella delle microsezioni leggeva `microGrid` direttamente
   // (plannedSpeedKmh/plannedPowerWatts sempre del PIANO), quindi non si aggiornava affatto
   // quando si attivava "Verifica dati" — il grafico sopra cambiava, la tabella sotto no.
@@ -898,6 +937,15 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
                       🔍 Verifica dati ({microSectionsWithRealPower} microsezioni con potenza reale)
                     </label>
                   )}
+                  {microBrakingCount > 0 && (
+                    <span
+                      className="pva-micro-active-label"
+                      style={{ marginLeft: '1rem' }}
+                      title="Bin in discesa dove la velocità reale è molto più bassa di quanto il modello preveda usando la potenza reale — quasi certamente frenata (curve, fondo tecnico), non un errore del modello. Segnalati anche in tabella e nel CSV."
+                    >
+                      🛑 {microBrakingCount} probabile frenata
+                    </span>
+                  )}
                 </div>
 
                 {microSummary && (
@@ -987,6 +1035,7 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
                         <th>Pot. {microVerifyMode ? 'verif.' : 'pian.'}</th>
                         <th>Pot. reale</th>
                         <th>Δ pot.</th>
+                        <th title="Discesa con velocità reale molto più bassa di quanto il modello preveda usando la potenza reale: quasi certamente frenata, non errore di modello">🛑</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -994,8 +1043,9 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
                         const deltaSpeedPct = p.actualSpeedKmh != null && p.plannedSpeedKmh > 0 ? ((p.actualSpeedKmh - p.plannedSpeedKmh) / p.plannedSpeedKmh) * 100 : null;
                         const deltaPowerPct =
                           p.actualPowerWatts != null && p.plannedPowerWatts > 0 ? ((p.actualPowerWatts - p.plannedPowerWatts) / p.plannedPowerWatts) * 100 : null;
+                        const braking = isLikelyBraking(p);
                         return (
-                          <tr key={i}>
+                          <tr key={i} className={braking ? 'pva-row-braking' : undefined}>
                             <td>{i + 1}</td>
                             <td>
                               {p.fromKm.toFixed(2)} – {p.toKm.toFixed(2)}
@@ -1007,12 +1057,55 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
                             <td>{Math.round(p.plannedPowerWatts)} W</td>
                             <td>{p.actualPowerWatts != null ? `${Math.round(p.actualPowerWatts)} W` : '—'}</td>
                             <td>{deltaBadge(deltaPowerPct, '%')}</td>
+                            <td>{braking ? '🛑' : ''}</td>
                           </tr>
                         );
                       })}
                     </tbody>
                   </table>
                 </div>
+            </div>
+          </CollapsibleSection>
+
+          <CollapsibleSection
+            title="⚡ Bilancio energetico (ipotesi inerzia)"
+            defaultOpen={false}
+            open={energyOpen}
+            onToggle={setEnergyOpen}
+            collapsedHint="Confronto secondo-per-secondo (non a bin): verifica se potenza pedalata meno resistenze note spiega davvero la variazione di velocità reale misurata, invece di assumere l'equilibrio stazionario usato altrove in questa vista. Serve a isolare l'inerzia (e le frenate) dagli altri errori del modello."
+          >
+            <div className="physics-panel pva-energy-panel">
+              <p className="wind-panel-hint">
+                A differenza delle tabelle sopra (che confrontano velocità MEDIE per tratto assumendo l'equilibrio istantaneo), qui ogni riga è un
+                intervallo di pochi secondi fra due campioni consecutivi dell'attività — abbastanza breve da NON poter assumere quell'equilibrio.
+                Il "residuo" è l'energia cinetica che pedalata + gravità + resistenze note non spiegano: se negativo e concentrato in discesa
+                ripida è quasi certamente frenata (non un errore di modello); se sistematico e correlato con l'accelerazione, è il segnale di
+                inerzia che stavamo cercando.
+              </p>
+              <div className="pva-micro-controls">
+                <span className="pva-micro-active-label">Smoothing temporale:</span>
+                <NumberField value={energySmoothingSeconds} onCommit={v => setEnergySmoothingSeconds(Math.max(0, v))} step={1} min={0} max={15} />
+                <span className="pva-micro-active-label">secondi · {energyBalanceRows.length} intervalli</span>
+              </div>
+
+              {energySummary && (
+                <p className="wind-panel-hint">
+                  Residuo mediano: <strong>{Math.round(energySummary.medianResidualW)} W</strong> ·{' '}
+                  {energySummary.likelyBrakingCount} intervalli su {energySummary.n} con residuo sotto -50 W (probabile frenata).
+                </p>
+              )}
+
+              <div className="pva-export-row">
+                <button
+                  type="button"
+                  className="btn btn-sm ghost"
+                  disabled={energyBalanceRows.length === 0}
+                  onClick={() => downloadTextFile(`bilancio_energetico_${safeRouteName}.csv`, energyBalanceToCsv(energyBalanceRows), 'text/csv')}
+                  title="Esporta il bilancio energetico secondo-per-secondo in CSV"
+                >
+                  ⬇️ Esporta CSV
+                </button>
+              </div>
             </div>
           </CollapsibleSection>
         </>

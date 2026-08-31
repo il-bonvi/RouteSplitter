@@ -288,3 +288,28 @@ export function computePlanVsActualFineGrid(
     };
   });
 }
+
+/** Sotto questa pendenza (%) un bin è considerato "in discesa" ai fini del flag frenata. */
+const BRAKING_GRADIENT_THRESHOLD_PCT = -1;
+/** Sotto questo scarto (km/h, verificata - reale) un bin è considerato sospetto. Soglia
+ * scelta sui dati reali del 2026-08-30 ("3 giorni trevigiana"): separa nettamente i bin di
+ * frenata evidente (scarti da -9 a -44 km/h) dal normale rumore di discesa (mediana -0.4/-1.5
+ * km/h nei bin senza frenata). Volutamente conservativa: meglio qualche frenata non
+ * segnalata che falsi positivi che nascondono un vero problema di modello. */
+const BRAKING_DELTA_THRESHOLD_KMH = -8;
+
+/**
+ * Euristica "probabile frenata": in discesa, con potenza reale ancora pedalata (non a ruota
+ * libera) ma velocità reale molto più bassa di quanto il modello preveda usando quella stessa
+ * potenza (`verifiedSpeedKmh`) — il segno più chiaro che il ciclista sta frenando (curve,
+ * fondo tecnico, sicurezza) piuttosto che subire un limite del modello fisico. Vedi analisi
+ * F3.11/F3.12 in `stato_rs.md` per l'origine delle soglie. Puramente diagnostica: non
+ * modifica alcun calcolo esistente, serve solo a segnalare i bin da NON usare per giudicare
+ * l'accuratezza del modello.
+ */
+export function isLikelyBraking(point: Pick<PlanVsActualFinePoint, 'gradientPct' | 'actualSpeedKmh' | 'verifiedSpeedKmh'>): boolean {
+  if (point.gradientPct >= BRAKING_GRADIENT_THRESHOLD_PCT) return false;
+  if (point.actualSpeedKmh == null || point.verifiedSpeedKmh == null) return false;
+  return point.actualSpeedKmh - point.verifiedSpeedKmh < BRAKING_DELTA_THRESHOLD_KMH;
+}
+

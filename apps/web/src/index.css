@@ -1652,6 +1652,10 @@ body {
   margin-bottom: 0.5rem;
 }
 
+.pva-row-braking {
+  background: rgba(220, 38, 38, 0.08);
+}
+
 .pva-summary-grid {
   display: grid;
   grid-template-columns: 90px repeat(3, 1fr);
