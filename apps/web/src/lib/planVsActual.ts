@@ -6,6 +6,9 @@ import {
   bucketSamplesByBreakpoints,
   estimateWindFromSamples,
   parseClockTimeToMinutes,
+  estimateCurveRadiusM,
+  maxCorneringSpeedKmh as physicsMaxCorneringSpeedKmh,
+  simulateDynamicPacing,
   type PhysicsParams,
   type ProcessedPoint,
   type SectionBreakpoint,
@@ -199,6 +202,21 @@ export interface PlanVsActualFinePoint {
    * questo campo è puramente calcolato per il confronto, non tocca nulla di persistito.
    * `null` quando il bin non ha un campione di potenza reale (nessun dato da verificare). */
   verifiedSpeedKmh: number | null;
+  /** Raggio di curvatura stimato del percorso in questo bin (m), `Infinity` se il tratto è
+   * sostanzialmente dritto. Diagnostico (F3.15): serve a distinguere una vera frenata per
+   * curva stretta da un errore del modello fisico — vedi `estimateCurveRadiusM` in
+   * physics-core. */
+  curveRadiusM: number;
+  /** Velocità massima "di sicurezza" in curva a questo raggio (km/h), `Infinity` se dritto —
+   * vedi `maxCorneringSpeedKmh` in physics-core per il significato di questo limite. */
+  maxCorneringSpeedKmh: number;
+  /** Come `verifiedSpeedKmh` (STESSA potenza reale in ingresso, STESSA fisica di base) ma
+   * calcolata dal motore dinamico (F3.16/F3.17: integrazione nel tempo con inerzia) invece
+   * che dall'equilibrio stazionario — a differenza di `verifiedSpeedKmh`, qui il bin NON è
+   * indipendente dai vicini: la simulazione è continua su tutto il tratto coperto da dati
+   * reali, poi mediata per bin solo per il confronto/display. `null` quando non ci sono
+   * abbastanza campioni reali per simulare (stesse condizioni di `verifiedSpeedKmh`). */
+  dynamicVerifiedSpeedKmh: number | null;
 }
 
 function findCoveringPair(sorted: SectionBreakpoint[], distKm: number): [SectionBreakpoint, SectionBreakpoint] {
@@ -239,6 +257,24 @@ export function computePlanVsActualFineGrid(
     .sort((a, b) => a.distKm - b.distKm);
   let sampleIdx = 0;
 
+  // Simulazione dinamica CONTINUA sui dati reali (F3.17): un segmento per ogni coppia di
+  // campioni reali consecutivi, potenza = quella del campione — copre esattamente il tratto
+  // con dati reali, senza inventare potenza dove non ce n'è. A differenza di `verifiedSpeedKmh`
+  // (calcolato bin per bin, indipendentemente), questa è UNA sola simulazione su tutto il
+  // tratto: l'inerzia si porta dietro da un bin al successivo, come deve. Il risultato viene
+  // poi mediato per bin più sotto, solo per il confronto — la simulazione stessa non lavora a
+  // bin. Stesso limite già noto di `simulateDynamicPacing`: vento scalare, non per zona.
+  const dynamicSteps =
+    sortedSamples.length >= 2
+      ? simulateDynamicPacing(
+          sortedSamples.slice(0, -1).map((s, i) => ({ d0Km: s.distKm, d1Km: sortedSamples[i + 1]!.distKm, targetPowerW: s.powerW })),
+          routePoints,
+          params,
+          { dtSec: 1, initialSpeedMS: 0 }
+        )
+      : [];
+  let dynIdx = 0;
+
   return fineSegs.map(seg => {
     const midKm = (seg.d0Km + seg.d1Km) / 2;
     const [, to] = findCoveringPair(sorted, midKm);
@@ -272,7 +308,18 @@ export function computePlanVsActualFineGrid(
 
     const verifiedSpeedKmh = actualPowerWatts != null ? speedFromPower(actualPowerWatts, seg.gradient, effectiveParams) * 3.6 : null;
 
+    while (dynIdx < dynamicSteps.length && dynamicSteps[dynIdx]!.distKm < seg.d0Km) dynIdx++;
+    const dynInBin: number[] = [];
+    let k = dynIdx;
+    while (k < dynamicSteps.length && dynamicSteps[k]!.distKm < seg.d1Km) {
+      dynInBin.push(dynamicSteps[k]!.speedMS);
+      k++;
+    }
+    const dynamicVerifiedSpeedKmh = dynInBin.length > 0 ? (dynInBin.reduce((s, x) => s + x, 0) / dynInBin.length) * 3.6 : null;
+
     const ele = getInterpolatedPoint(routePoints, midKm * 1000).ele;
+    const curveRadiusM = estimateCurveRadiusM(routePoints, midKm);
+    const maxCorneringSpeedKmh = physicsMaxCorneringSpeedKmh(curveRadiusM);
 
     return {
       distKm: midKm,
@@ -284,7 +331,10 @@ export function computePlanVsActualFineGrid(
       plannedPowerWatts,
       actualSpeedKmh,
       actualPowerWatts,
-      verifiedSpeedKmh
+      verifiedSpeedKmh,
+      curveRadiusM,
+      maxCorneringSpeedKmh,
+      dynamicVerifiedSpeedKmh
     };
   });
 }
@@ -297,6 +347,12 @@ const BRAKING_GRADIENT_THRESHOLD_PCT = -1;
  * km/h nei bin senza frenata). Volutamente conservativa: meglio qualche frenata non
  * segnalata che falsi positivi che nascondono un vero problema di modello. */
 const BRAKING_DELTA_THRESHOLD_KMH = -8;
+/** Sotto questa velocità reale (km/h) nel bin PRECEDENTE, si considera che il ciclista fosse
+ * fermo o quasi — una velocità bassa nel bin corrente è allora una partenza da fermo (in
+ * accelerazione, non frenata): fisicamente l'opposto, anche se produce lo stesso sintomo
+ * superficiale (reale molto sotto la verificata) che il resto dell'euristica cerca. Segnalato
+ * dall'utente il 2026-08-31 sul primo bin del percorso "3 giorni trevigiana". */
+const STANDING_START_PREV_SPEED_KMH = 5;
 
 /**
  * Euristica "probabile frenata": in discesa, con potenza reale ancora pedalata (non a ruota
@@ -306,10 +362,20 @@ const BRAKING_DELTA_THRESHOLD_KMH = -8;
  * F3.11/F3.12 in `stato_rs.md` per l'origine delle soglie. Puramente diagnostica: non
  * modifica alcun calcolo esistente, serve solo a segnalare i bin da NON usare per giudicare
  * l'accuratezza del modello.
+ *
+ * `previousPoint` (opzionale, il bin immediatamente precedente in ordine di percorrenza) serve
+ * a escludere le PARTENZE DA FERMO: se il ciclista era già quasi fermo nel bin prima, una
+ * velocità reale bassa in questo bin è normale accelerazione (non frenata) — stesso sintomo
+ * superficiale (reale « verificata), causa opposta. Se `previousPoint` non è fornito, questo
+ * caso non viene escluso (comportamento invariato rispetto a prima del 2026-08-31).
  */
-export function isLikelyBraking(point: Pick<PlanVsActualFinePoint, 'gradientPct' | 'actualSpeedKmh' | 'verifiedSpeedKmh'>): boolean {
+export function isLikelyBraking(
+  point: Pick<PlanVsActualFinePoint, 'gradientPct' | 'actualSpeedKmh' | 'verifiedSpeedKmh'>,
+  previousPoint?: Pick<PlanVsActualFinePoint, 'actualSpeedKmh'> | null
+): boolean {
   if (point.gradientPct >= BRAKING_GRADIENT_THRESHOLD_PCT) return false;
   if (point.actualSpeedKmh == null || point.verifiedSpeedKmh == null) return false;
+  if (previousPoint?.actualSpeedKmh != null && previousPoint.actualSpeedKmh < STANDING_START_PREV_SPEED_KMH) return false;
   return point.actualSpeedKmh - point.verifiedSpeedKmh < BRAKING_DELTA_THRESHOLD_KMH;
 }
 

@@ -123,6 +123,10 @@ describe('planVsActualFineGridToCsv', () => {
     expect(lines).toHaveLength(1 + grid.length);
     expect(lines[0]).toContain('Pendenza (%)');
     expect(lines[0]).toContain('Quota (m)');
+    expect(lines[0]).toContain('Vel. verificata (dinamica) (km/h)');
+    // Con dati reali su un'uscita lunga, almeno un bin deve avere il valore dinamico popolato
+    // (non solo header vuoto) — prova che la colonna porta davvero un numero, non solo un'etichetta.
+    expect(grid.some(p => p.dynamicVerifiedSpeedKmh != null)).toBe(true);
   });
 
   it('lascia la cella vuota quando manca il dato reale nel bin', () => {
@@ -148,6 +152,27 @@ describe('planVsActualFineGridToCsv', () => {
     const grid = computePlanVsActualFineGrid(breakpoints, descPoints, params, 'speed', 250, undefined, 20, samples, 1);
     const csv = planVsActualFineGridToCsv(grid);
     expect(csv).toContain('SI');
+  });
+
+  it('NON segnala come frenata un bin che segue una partenza da fermo', () => {
+    const descPoints = processRoute(
+      Array.from({ length: 200 }, (_, i) => ({ lat: 45.0 + (i / 199) * (20 / 111), lon: 11.0, ele: 300 - i * 1.2 }))
+    ).points;
+    const breakpoints: SectionBreakpoint[] = [
+      { id: 'start', distKm: 0, fixed: 'start', sectionLabel: null, speedKmh: null, powerWatts: null },
+      { id: 'finish', distKm: 20, fixed: 'finish', sectionLabel: null, speedKmh: 30, powerWatts: null }
+    ];
+    // Primo bin: velocità reale ~0 (fermo al via). Secondo bin: stesso sintomo "reale molto
+    // sotto verificata" del test sopra, ma stavolta è una partenza da fermo, non una frenata.
+    const samples: CdaSample[] = [
+      { speedMS: 0.3, powerW: 300, gradientPct: -8, distKm: 0.05 },
+      { speedMS: 24 / 3.6, powerW: 300, gradientPct: -8, distKm: 0.15 }
+    ];
+    const grid = computePlanVsActualFineGrid(breakpoints, descPoints, params, 'speed', 250, undefined, 20, samples, 0.1);
+    const csv = planVsActualFineGridToCsv(grid);
+    const lines = csv.split('\n');
+    // Il secondo bin (indice riga 2, dopo l'header) non deve avere "SI".
+    expect(lines[2]).not.toContain(',SI');
   });
 });
 

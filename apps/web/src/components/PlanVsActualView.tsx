@@ -10,6 +10,7 @@ import { computePlanVsActualSections, computePlanVsActualFineGrid, padSeriesToRo
 import { formatTime, formatDeltaTime } from '../lib/formatTime.js';
 import { planVsActualSectionsToCsv, planVsActualFineGridToCsv, energyBalanceToCsv, downloadTextFile } from '../lib/exportCsv.js';
 import { computeActivityEnergyBalance } from '../lib/energyBalance.js';
+import { computeDynamicVsClassicComparison } from '../lib/dynamicSimulation.js';
 import { RouteMap, type MapWindControlData } from './RouteMap.js';
 import { ActivityElevationChart } from './ActivityElevationChart.js';
 import { ElevationChart } from './ElevationChart.js';
@@ -164,6 +165,14 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
   const [energyOpen, setEnergyOpen] = useState(false);
   const [energySmoothingSeconds, setEnergySmoothingSeconds] = useState(3);
 
+  // Simulazione dinamica (F3.16, "modalità alternativa" all'equilibrio per sezione) —
+  // integra la velocità nel tempo invece di risolvere un equilibrio stazionario per
+  // sezione, sullo STESSO piano attuale (stessi breakpoint/potenza). Sperimentale: non
+  // sostituisce nulla, è solo un confronto diagnostico per capire quanto "costa" l'inerzia
+  // sul piano corrente. Gated su pannello aperto: la simulazione secondo-per-secondo di un
+  // percorso lungo non è gratuita, non ha senso calcolarla se non richiesta.
+  const [dynamicOpen, setDynamicOpen] = useState(false);
+
   useEffect(() => {
     void store.routes.listByAthlete(null).then(setRoutes);
   }, [store]);
@@ -177,6 +186,26 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
   }, [store, selectedRouteId]);
 
   const defaultPowerWatts = plan?.defaultPowerWatts ?? 250;
+
+  // Simulazione dinamica (F3.16, "modalità alternativa" all'equilibrio per sezione) —
+  // integra la velocità nel tempo invece di risolvere un equilibrio stazionario per
+  // sezione, sullo STESSO piano attuale (stessi breakpoint/potenza). Sperimentale: non
+  // sostituisce nulla, è solo un confronto diagnostico per capire quanto "costa" l'inerzia
+  // sul piano corrente. Gated su pannello aperto: la simulazione secondo-per-secondo di un
+  // percorso lungo non è gratuita, non ha senso calcolarla se non richiesta.
+  const dynamicComparison = useMemo(() => {
+    if (!dynamicOpen || !plan || !routePoints || routePoints.length < 2) return null;
+    return computeDynamicVsClassicComparison(
+      plan.breakpoints,
+      routePoints,
+      physicsParams,
+      plan.calcMode,
+      defaultPowerWatts,
+      plan.windZones,
+      parseClockTimeToMinutes(plan.plannedStartTime)
+    );
+  }, [dynamicOpen, plan, routePoints, physicsParams, defaultPowerWatts]);
+
 
   // Sezioni del PIANO (non del confronto) — servono a ElevationChart/StatsRow, esattamente
   // come nella tab "Percorso".
@@ -403,7 +432,7 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
   // c'è nulla da "verificare"); `verifiedSpeedKmh` è già calcolato dalla libreria con la
   // STESSA fisica (pendenza, vento, CdA) della velocità pianificata, sostituendo solo la
   // potenza in ingresso con quella reale di quel bin.
-  const [microVerifyMode, setMicroVerifyMode] = useState(false);
+  const [microVerifyMode, setMicroVerifyMode] = useState<'planned' | 'verified' | 'verifiedDynamic'>('planned');
   const microVerifiedPowerSeries = useMemo(
     () =>
       padSeriesToRouteEdges(
@@ -420,14 +449,40 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
       ),
     [microGrid, display]
   );
-  const microDisplayPowerSeries = microVerifyMode ? microVerifiedPowerSeries : microPlannedPowerSeries;
-  const microDisplaySpeedSeries = microVerifyMode ? microVerifiedSpeedSeries : microPlannedSpeedSeries;
+  // Stessa identica potenza reale di microVerifiedSpeedSeries — cambia solo il MODELLO che la
+  // trasforma in velocità (dinamico, F3.16/F3.17, invece di equilibrio stazionario). Copia
+  // esatta del pattern sopra, non una nuova astrazione: stesso filtro, stesso padding.
+  const microVerifiedDynamicSpeedSeries = useMemo(
+    () =>
+      padSeriesToRouteEdges(
+        microGrid.filter(p => p.dynamicVerifiedSpeedKmh != null).map(p => ({ distKm: p.distKm, speedKmh: p.dynamicVerifiedSpeedKmh! })),
+        display?.distanceKm ?? 0
+      ),
+    [microGrid, display]
+  );
+  const microDisplayPowerSeries = microVerifyMode === 'planned' ? microPlannedPowerSeries : microVerifiedPowerSeries;
+  const microDisplaySpeedSeries =
+    microVerifyMode === 'verifiedDynamic' ? microVerifiedDynamicSpeedSeries : microVerifyMode === 'verified' ? microVerifiedSpeedSeries : microPlannedSpeedSeries;
   const microSectionsWithRealPower = useMemo(() => microGrid.filter(p => p.actualPowerWatts != null).length, [microGrid]);
   // Bin segnalati come "probabile frenata" (F3.13): non un errore di modello, il rider sta
   // decelerando volontariamente (curve, fondo tecnico) — vedi isLikelyBraking in planVsActual.ts
   // per la soglia. Calcolato su microGrid (dati grezzi), non su microDisplayGrid, perché il
   // flag deve restare lo stesso indipendentemente dal toggle "Verifica dati" della tabella.
-  const microBrakingCount = useMemo(() => microGrid.filter(isLikelyBraking).length, [microGrid]);
+  const microBrakingCount = useMemo(
+    () => microGrid.filter((p, i) => isLikelyBraking(p, i > 0 ? microGrid[i - 1] : null)).length,
+    [microGrid]
+  );
+  // Validazione dell'ipotesi curvatura (F3.15, 2026-08-31): fra i bin "probabile frenata",
+  // quanti hanno una velocità reale coerente con un limite di curva stimato dal percorso
+  // (non con un errore di modello)? Margine 15% oltre il limite fisico stimato: μ e finestra
+  // di stima sono approssimazioni, non un vincolo esatto — un piccolo margine evita di
+  // scartare come "non spiegati da curva" bin che in realtà lo sono, per un errore di stima.
+  const microBrakingCurveMatch = useMemo(() => {
+    const flagged = microGrid.filter((p, i) => isLikelyBraking(p, i > 0 ? microGrid[i - 1] : null));
+    if (flagged.length === 0) return null;
+    const matching = flagged.filter(p => p.actualSpeedKmh != null && Number.isFinite(p.maxCorneringSpeedKmh) && p.actualSpeedKmh <= p.maxCorneringSpeedKmh * 1.15).length;
+    return { flagged: flagged.length, matching };
+  }, [microGrid]);
   // BUG SEGNALATO: la tabella delle microsezioni leggeva `microGrid` direttamente
   // (plannedSpeedKmh/plannedPowerWatts sempre del PIANO), quindi non si aggiornava affatto
   // quando si attivava "Verifica dati" — il grafico sopra cambiava, la tabella sotto no.
@@ -436,12 +491,18 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
   // alla tabella, così i due non possono più disallinearsi.
   const microDisplayGrid = useMemo(() => {
     return microGrid.map(p => {
-      const hasVerified = microVerifyMode && p.actualPowerWatts != null && p.verifiedSpeedKmh != null;
-      const plannedSpeedKmh = hasVerified ? p.verifiedSpeedKmh! : p.plannedSpeedKmh;
-      const plannedPowerWatts = hasVerified ? p.actualPowerWatts! : p.plannedPowerWatts;
-      return { ...p, plannedSpeedKmh, plannedPowerWatts, isVerified: hasVerified };
+      const hasVerified = microVerifyMode === 'verified' && p.actualPowerWatts != null && p.verifiedSpeedKmh != null;
+      const hasVerifiedDynamic = microVerifyMode === 'verifiedDynamic' && p.actualPowerWatts != null && p.dynamicVerifiedSpeedKmh != null;
+      const plannedSpeedKmh = hasVerifiedDynamic ? p.dynamicVerifiedSpeedKmh! : hasVerified ? p.verifiedSpeedKmh! : p.plannedSpeedKmh;
+      const plannedPowerWatts = hasVerified || hasVerifiedDynamic ? p.actualPowerWatts! : p.plannedPowerWatts;
+      return { ...p, plannedSpeedKmh, plannedPowerWatts, isVerified: hasVerified || hasVerifiedDynamic };
     });
   }, [microGrid, microVerifyMode]);
+  // Etichetta condivisa da grafico/tabella per la modalità corrente — un solo posto dove
+  // decidere il testo, invece di ripetere lo stesso ternario in 5 punti diversi della JSX.
+  const microModeLabel = microVerifyMode === 'verifiedDynamic' ? 'Verif. (dinamica)' : microVerifyMode === 'verified' ? 'Verif.' : 'Pian.';
+  const microModeChartLabel =
+    microVerifyMode === 'verifiedDynamic' ? 'verificata dinamica (potenza reale)' : microVerifyMode === 'verified' ? 'verificata (potenza reale)' : 'pianificata';
 
   // Riepilogo compatto per le microsezioni — stesso identico layout/calcolo del riepilogo
   // "Confronto per sezione" sopra (media pesata sul tempo, non aritmetica sulle sezioni):
@@ -933,8 +994,26 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
                   </span>
                   {microSectionsWithRealPower > 0 && (
                     <label className="stream-toggle" style={{ marginLeft: '1rem' }} title="Mostra, al posto della linea pianificata, la velocità che il modello predice usando la potenza REALE registrata in ogni microsezione — per vedere dove il modello fisico sovrastima/sottostima, isolato dalla scelta di pacing.">
-                      <input type="checkbox" checked={microVerifyMode} onChange={e => setMicroVerifyMode(e.target.checked)} />
+                      <input
+                        type="checkbox"
+                        checked={microVerifyMode === 'verified'}
+                        onChange={e => setMicroVerifyMode(e.target.checked ? 'verified' : 'planned')}
+                      />
                       🔍 Verifica dati ({microSectionsWithRealPower} microsezioni con potenza reale)
+                    </label>
+                  )}
+                  {microSectionsWithRealPower > 0 && (
+                    <label
+                      className="stream-toggle"
+                      style={{ marginLeft: '1rem' }}
+                      title="Come 'Verifica dati', STESSA potenza reale in ingresso — ma calcolata dal motore dinamico (integrazione nel tempo, con inerzia) invece che dall'equilibrio stazionario. Confronta i due per vedere dove l'inerzia conta davvero."
+                    >
+                      <input
+                        type="checkbox"
+                        checked={microVerifyMode === 'verifiedDynamic'}
+                        onChange={e => setMicroVerifyMode(e.target.checked ? 'verifiedDynamic' : 'planned')}
+                      />
+                      🔄 Verifica dati (dinamica)
                     </label>
                   )}
                   {microBrakingCount > 0 && (
@@ -944,6 +1023,7 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
                       title="Bin in discesa dove la velocità reale è molto più bassa di quanto il modello preveda usando la potenza reale — quasi certamente frenata (curve, fondo tecnico), non un errore del modello. Segnalati anche in tabella e nel CSV."
                     >
                       🛑 {microBrakingCount} probabile frenata
+                      {microBrakingCurveMatch && ` (${microBrakingCurveMatch.matching}/${microBrakingCurveMatch.flagged} coerenti con una curva stimata dal percorso)`}
                     </span>
                   )}
                 </div>
@@ -952,7 +1032,7 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
                   <div className="pva-summary-grid">
                     <div className="pva-summary-header">
                       <span></span>
-                      <span>{microVerifyMode ? 'Verif.' : 'Pian.'}</span>
+                      <span>{microModeLabel}</span>
                       <span>Reale</span>
                       <span>Δ</span>
                     </div>
@@ -1004,8 +1084,8 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
                       windZones={plan.windZones}
                       plannedPowerSeries={microDisplayPowerSeries}
                       plannedSpeedSeries={microDisplaySpeedSeries}
-                      plannedPowerLabel={microVerifyMode ? 'verificata (potenza reale)' : 'pianificata'}
-                      plannedSpeedLabel={microVerifyMode ? 'verificata (potenza reale)' : 'pianificata'}
+                      plannedPowerLabel={microModeChartLabel}
+                      plannedSpeedLabel={microModeChartLabel}
                       microBoundariesKm={microBoundariesKm}
                     />
                   </div>
@@ -1029,10 +1109,10 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
                         <th>#</th>
                         <th>Tratto (km)</th>
                         <th>Pend.</th>
-                        <th>Vel. {microVerifyMode ? 'verif.' : 'pian.'}</th>
+                        <th>Vel. {microModeLabel === 'Pian.' ? 'pian.' : 'verif.'}</th>
                         <th>Vel. reale</th>
                         <th>Δ vel.</th>
-                        <th>Pot. {microVerifyMode ? 'verif.' : 'pian.'}</th>
+                        <th>Pot. {microModeLabel === 'Pian.' ? 'pian.' : 'verif.'}</th>
                         <th>Pot. reale</th>
                         <th>Δ pot.</th>
                         <th title="Discesa con velocità reale molto più bassa di quanto il modello preveda usando la potenza reale: quasi certamente frenata, non errore di modello">🛑</th>
@@ -1043,7 +1123,7 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
                         const deltaSpeedPct = p.actualSpeedKmh != null && p.plannedSpeedKmh > 0 ? ((p.actualSpeedKmh - p.plannedSpeedKmh) / p.plannedSpeedKmh) * 100 : null;
                         const deltaPowerPct =
                           p.actualPowerWatts != null && p.plannedPowerWatts > 0 ? ((p.actualPowerWatts - p.plannedPowerWatts) / p.plannedPowerWatts) * 100 : null;
-                        const braking = isLikelyBraking(p);
+                        const braking = isLikelyBraking(p, i > 0 ? microDisplayGrid[i - 1] : null);
                         return (
                           <tr key={i} className={braking ? 'pva-row-braking' : undefined}>
                             <td>{i + 1}</td>
@@ -1106,6 +1186,42 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
                   ⬇️ Esporta CSV
                 </button>
               </div>
+            </div>
+          </CollapsibleSection>
+
+          <CollapsibleSection
+            title="🔄 Simulazione dinamica (modalità alternativa, sperimentale)"
+            defaultOpen={false}
+            open={dynamicOpen}
+            onToggle={setDynamicOpen}
+            collapsedHint="Confronta il tempo totale del piano attuale calcolato nei due modi: equilibrio per sezione (il modello di sempre) contro integrazione della velocità nel tempo, con inerzia — partenza da fermo compresa. Non sostituisce nulla, è solo un confronto diagnostico."
+          >
+            <div className="physics-panel">
+              <p className="wind-panel-hint">
+                Stesso piano (stessi tratti, stessa potenza target per tratto), calcolato in due modi: il modello classico risolve un equilibrio di
+                velocità per ciascun tratto; la simulazione dinamica integra la velocità secondo per secondo, partendo da fermo, lasciando che
+                l'inerzia e i cambi di pendenza reali (non la media del tratto) influenzino il risultato. La differenza fra i due è quanto
+                "costa" in tempo l'inerzia su QUESTO piano specifico — non è ancora usata per scegliere la potenza (l'ottimizzatore di pacing
+                resta quello classico), solo per vedere l'effetto a piano già fatto.
+              </p>
+              {dynamicComparison ? (
+                <div className="pva-summary-grid">
+                  <div className="pva-summary-item">
+                    <span className="pva-summary-label">Tempo previsto (equilibrio classico)</span>
+                    <span className="pva-summary-val">{formatTime(dynamicComparison.classicTotalHours)}</span>
+                  </div>
+                  <div className="pva-summary-item">
+                    <span className="pva-summary-label">Tempo previsto (simulazione dinamica)</span>
+                    <span className="pva-summary-val">{formatTime(dynamicComparison.dynamicTotalHours)}</span>
+                  </div>
+                  <div className="pva-summary-item">
+                    <span className="pva-summary-label">Differenza (costo dell'inerzia sul piano)</span>
+                    {deltaTimeBadge(dynamicComparison.dynamicTotalHours - dynamicComparison.classicTotalHours)}
+                  </div>
+                </div>
+              ) : (
+                <p className="wind-panel-hint">Carica un piano con percorso per calcolare il confronto.</p>
+              )}
             </div>
           </CollapsibleSection>
         </>

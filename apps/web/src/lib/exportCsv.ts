@@ -120,10 +120,13 @@ export function planVsActualFineGridToCsv(points: PlanVsActualFinePoint[]): stri
     'Vel. reale (km/h)',
     'Pot. reale (W)',
     'Vel. verificata - pot.reale (km/h)',
+    'Vel. verificata (dinamica) (km/h)',
     'Delta vel. pian.-reale (km/h)',
     'Delta vel. pian.-reale (%)',
     'Delta vel. verificata-reale (km/h)',
-    'Probabile frenata'
+    'Probabile frenata',
+    'Raggio curva stimato (m)',
+    'Vel. max sicurezza in curva (km/h)'
   ];
   const rows = points.map((p, i) => {
     const deltaAbs = p.actualSpeedKmh != null ? p.actualSpeedKmh - p.plannedSpeedKmh : null;
@@ -141,10 +144,13 @@ export function planVsActualFineGridToCsv(points: PlanVsActualFinePoint[]): stri
       csvNum(p.actualSpeedKmh),
       csvNum(p.actualPowerWatts, 0),
       csvNum(p.verifiedSpeedKmh),
+      csvNum(p.dynamicVerifiedSpeedKmh),
       csvNum(deltaAbs),
       csvNum(deltaPct, 1),
       csvNum(deltaVerified),
-      isLikelyBraking(p) ? 'SI' : ''
+      isLikelyBraking(p, i > 0 ? points[i - 1] : null) ? 'SI' : '',
+      Number.isFinite(p.curveRadiusM) ? Math.round(p.curveRadiusM) : '',
+      Number.isFinite(p.maxCorneringSpeedKmh) ? p.maxCorneringSpeedKmh.toFixed(1) : ''
     ];
   });
   return [header, ...rows].map(row => row.map(csvCell).join(',')).join('\n');

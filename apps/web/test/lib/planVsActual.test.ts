@@ -177,6 +177,43 @@ describe('computePlanVsActualFineGrid', () => {
     }
   });
 
+  it('su un percorso rettilineo il raggio di curvatura è infinito e non impone limiti (F3.15)', () => {
+    const points = flatRoute(20);
+    const grid = computePlanVsActualFineGrid(breakpoints, points, params, 'speed', 250, undefined, 20, [], 1);
+    for (const p of grid) {
+      expect(p.curveRadiusM).toBe(Infinity);
+      expect(p.maxCorneringSpeedKmh).toBe(Infinity);
+    }
+  });
+
+  it('su un tornante il raggio di curvatura è finito e il limite di velocità basso (F3.15)', () => {
+    // Percorso a "L": rettilineo verso nord (300m), poi svolta netta di 90° verso est (300m).
+    // Spaziatura fitta (1m) perché la finestra di stima (15m di default) possa "vedere" bene
+    // la svolta — con punti radi la finestra cadrebbe interamente su un solo braccio della L.
+    const armM = 300;
+    const dLatPerM = 1 / 111320;
+    const dLonPerM = 1 / (111320 * Math.cos((45 * Math.PI) / 180));
+    const raw = [
+      ...Array.from({ length: armM }, (_, i) => ({ lat: 45.0 + i * dLatPerM, lon: 11.0, ele: 100 })),
+      ...Array.from({ length: armM }, (_, i) => ({ lat: 45.0 + armM * dLatPerM, lon: 11.0 + i * dLonPerM, ele: 100 }))
+    ];
+    const points = processRoute(raw).points;
+    const totalKm = points[points.length - 1]!.dist / 1000;
+    const localBreakpoints: SectionBreakpoint[] = [
+      { id: 'start', distKm: 0, fixed: 'start', sectionLabel: null, speedKmh: null, powerWatts: null },
+      { id: 'finish', distKm: totalKm, fixed: 'finish', sectionLabel: null, speedKmh: 30, powerWatts: null }
+    ];
+    const grid = computePlanVsActualFineGrid(localBreakpoints, points, params, 'speed', 250, undefined, totalKm, [], 0.02);
+    // Nel tratto rettilineo (lontano dalla svolta, primi bin) il raggio deve essere infinito.
+    expect(grid[0]!.curveRadiusM).toBe(Infinity);
+    // Nel bin più vicino alla svolta (a metà percorso) il raggio deve essere finito e il
+    // limite di velocità in curva molto più basso di una velocità di crociera normale.
+    const halfKm = totalKm / 2;
+    const nearTurn = grid.reduce((best, p) => (Math.abs(p.distKm - halfKm) < Math.abs(best.distKm - halfKm) ? p : best));
+    expect(nearTurn.curveRadiusM).toBeLessThan(Infinity);
+    expect(nearTurn.maxCorneringSpeedKmh).toBeLessThan(60);
+  });
+
   it('rispetta il passo richiesto (stepKm) — bin equispaziati, non un numero fisso di bin', () => {
     const points = flatRoute(6.42, 400);
     const { samples } = syntheticActivity(6.42, 30, 800);
@@ -237,7 +274,22 @@ describe('padSeriesToRouteEdges', () => {
 describe('isLikelyBraking', () => {
   it('segnala un bin in discesa ripida dove il reale è molto sotto il previsto (dati reali 2026-08-30)', () => {
     // Bin #1 del CSV "3 giorni trevigiana": grad -3.51%, verificata 60.25, reale 33.80.
+    // SENZA contesto sul bin precedente, questo scarto da solo è indistinguibile da una
+    // frenata (per questo la funzione lo segnala se `previousPoint` non è fornito) — ma è in
+    // realtà una PARTENZA DA FERMO, vedi test sotto.
     expect(isLikelyBraking({ gradientPct: -3.51, actualSpeedKmh: 33.8, verifiedSpeedKmh: 60.25 })).toBe(true);
+  });
+
+  it('NON segnala la stessa situazione se il bin precedente era fermo/quasi fermo (partenza da fermo, non frenata)', () => {
+    // Corretto dopo la segnalazione dell'utente il 2026-08-31: il primo bin del percorso è
+    // una partenza da fermo (velocità reale bassa perché si sta ancora accelerando dal via),
+    // non una frenata — sintomo superficiale identico, causa fisica opposta.
+    expect(isLikelyBraking({ gradientPct: -3.51, actualSpeedKmh: 33.8, verifiedSpeedKmh: 60.25 }, { actualSpeedKmh: 0 })).toBe(false);
+    expect(isLikelyBraking({ gradientPct: -3.51, actualSpeedKmh: 33.8, verifiedSpeedKmh: 60.25 }, { actualSpeedKmh: 2 })).toBe(false);
+  });
+
+  it('segnala normalmente se il bin precedente era già lanciato (non partenza da fermo)', () => {
+    expect(isLikelyBraking({ gradientPct: -3.51, actualSpeedKmh: 33.8, verifiedSpeedKmh: 60.25 }, { actualSpeedKmh: 45 })).toBe(true);
   });
 
   it('non segnala una discesa con scarto modesto (rumore normale, non frenata)', () => {
@@ -255,5 +307,51 @@ describe('isLikelyBraking', () => {
 
   it('il piano (pendenza ~0) non viene mai segnalato', () => {
     expect(isLikelyBraking({ gradientPct: 0, actualSpeedKmh: 5, verifiedSpeedKmh: 40 })).toBe(false);
+  });
+});
+
+describe('computePlanVsActualFineGrid — dynamicVerifiedSpeedKmh (F3.17)', () => {
+  it('su un\'uscita a velocità costante, converge a verifiedSpeedKmh (stessa fisica, dopo il transitorio iniziale)', () => {
+    const points = flatRoute(20);
+    const { samples } = syntheticActivity(20, 30);
+    const grid = computePlanVsActualFineGrid(breakpoints, points, params, 'speed', 250, undefined, 20, samples, 1);
+    const withDynamic = grid.filter(p => p.dynamicVerifiedSpeedKmh != null && p.verifiedSpeedKmh != null);
+    expect(withDynamic.length).toBeGreaterThan(5);
+    const lastFew = withDynamic.slice(-5);
+    for (const p of lastFew) {
+      expect(p.dynamicVerifiedSpeedKmh!).toBeCloseTo(p.verifiedSpeedKmh!, 0);
+    }
+  });
+
+  it('senza campioni reali, è null ovunque (stessa condizione di verifiedSpeedKmh)', () => {
+    const points = flatRoute(20);
+    const grid = computePlanVsActualFineGrid(breakpoints, points, params, 'speed', 250, undefined, 20, [], 1);
+    for (const p of grid) {
+      expect(p.dynamicVerifiedSpeedKmh).toBeNull();
+      expect(p.verifiedSpeedKmh).toBeNull();
+    }
+  });
+
+  it('subito dopo un cambio di pendenza, porta ancora "memoria" della velocità precedente, a differenza di verifiedSpeedKmh (indipendente bin per bin)', () => {
+    const n1 = 300,
+      n2 = 150;
+    const flatPts = Array.from({ length: n1 }, (_, i) => ({ lat: 45.0 + (i / n1) * (5 / 111), lon: 11.0, ele: 100 }));
+    const climbStart = 45.0 + 5 / 111;
+    const climbPts = Array.from({ length: n2 }, (_, i) => ({ lat: climbStart + (i / n2) * (2 / 111), lon: 11.0, ele: 100 + (i / n2) * 2000 * 0.06 }));
+    const points = processRoute([...flatPts, ...climbPts]).points;
+    const totalKm = points[points.length - 1]!.dist / 1000;
+    const localBreakpoints: SectionBreakpoint[] = [
+      { id: 'a', distKm: 0, fixed: 'start', sectionLabel: null, speedKmh: null, powerWatts: null },
+      { id: 'b', distKm: totalKm, fixed: 'finish', sectionLabel: null, speedKmh: null, powerWatts: 250 }
+    ];
+    const samples: CdaSample[] = [];
+    for (let d = 0; d < totalKm; d += 0.02) {
+      samples.push({ speedMS: 8, powerW: 250, gradientPct: d < 5 ? 0 : 6, distKm: d });
+    }
+    const grid = computePlanVsActualFineGrid(localBreakpoints, points, params, 'power', 250, undefined, totalKm, samples, 0.1);
+
+    const justAfterClimb = grid.find(p => p.fromKm > 5.0 && p.fromKm < 5.3 && p.dynamicVerifiedSpeedKmh != null && p.verifiedSpeedKmh != null);
+    expect(justAfterClimb).toBeDefined();
+    expect(justAfterClimb!.dynamicVerifiedSpeedKmh!).toBeGreaterThan(justAfterClimb!.verifiedSpeedKmh!);
   });
 });

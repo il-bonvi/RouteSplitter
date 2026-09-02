@@ -8,3 +8,5 @@ export * from './sections.js';
 export * from './wind.js';
 export * from './cdaFromActivity.js';
 export * from './energyBalance.js';
+export * from './curvature.js';
+export * from './dynamicSimulation.js';
