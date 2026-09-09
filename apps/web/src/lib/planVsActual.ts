@@ -1,5 +1,5 @@
 import {
-  computeSections,
+  computeDynamicSections,
   speedFromPower,
   powerFromSpeed,
   getInterpolatedPoint,
@@ -53,17 +53,20 @@ export interface PlanVsActualSectionRow {
   deltaPowerPct: number | null;
   /** vento implicito reale - vento pianificato. Positivo = più testa del previsto. */
   deltaWindKmh: number | null;
-  /** "Verifica dati" a livello di sezione: velocità che il modello predice usando la potenza
-   * MEDIA REALE di questa sezione (non quella pianificata), con la STESSA pendenza netta e
-   * vento effettivo già usati per `plannedSpeedKmh` — stesso principio di
-   * `PlanVsActualFinePoint.verifiedSpeedKmh` (microsezioni), qui a livello di sezione
-   * personalizzata. `null` quando la sezione non ha alcun campione di potenza reale. */
+  /** "Verifica dati" a livello di sezione: velocità che il motore dinamico predice usando la
+   * potenza MEDIA REALE di questa sezione (non quella pianificata) — una simulazione
+   * continua su tutto il percorso incatenando le sezioni (l'inerzia si porta dietro da una
+   * all'altra, come per il piano), usando la potenza pianificata come riserva per le sezioni
+   * senza campioni reali (per non spezzare la catena). `null` quando la sezione non ha alcun
+   * campione di potenza reale — stesso principio di `PlanVsActualFinePoint.verifiedSpeedKmh`
+   * (microsezioni), qui a livello di sezione personalizzata. */
   verifiedSpeedKmh: number | null;
 }
 
 /**
  * Confronto per sezione (granularità "come la tabella sezioni" del piano) fra ciò che il
- * piano prevedeva e ciò che i dati dell'attività reale mostrano nello stesso tratto.
+ * piano prevedeva e ciò che i dati dell'attività reale mostrano nello stesso tratto. Il
+ * motore è SEMPRE quello dinamico (D43, unico motore fisico in tutta l'app).
  */
 export function computePlanVsActualSections(
   breakpoints: SectionBreakpoint[],
@@ -74,28 +77,30 @@ export function computePlanVsActualSections(
   windZones: WindZoneBoundary[] | undefined,
   plannedStartTime: string | null,
   activityPoints: ActivityDisplayPoint[],
-  actualSamples: CdaSample[]
+  actualSamples: CdaSample[],
+  smoothingWindowMeters?: number
 ): PlanVsActualSectionRow[] {
   const plannedStartMinuteOfDay = parseClockTimeToMinutes(plannedStartTime);
-  const plannedResults = computeSections(
+  const plannedResults = computeDynamicSections(
     breakpoints,
     routePoints,
     params,
     calcMode,
     defaultPowerWatts,
     windZones,
-    plannedStartMinuteOfDay
+    plannedStartMinuteOfDay,
+    smoothingWindowMeters
   );
 
   const sorted = [...breakpoints].sort((a, b) => a.distKm - b.distKm);
   const internalKm = sorted.slice(1, -1).map(b => b.distKm);
   const buckets = bucketSamplesByBreakpoints(actualSamples, internalKm);
 
-  return plannedResults.map((pr, i) => {
+  // Prima passata: estrae i dati reali (velocità/potenza/vento) per sezione dai campioni —
+  // serve PRIMA di poter costruire la simulazione continua di verifica sotto (che ha bisogno
+  // della potenza reale di TUTTE le sezioni in un colpo solo, non sezione per sezione).
+  const actuals = plannedResults.map((pr, i) => {
     const bucket = buckets[i];
-    const fromKm = pr.from.distKm;
-    const toKm = pr.to.distKm;
-
     let actualSpeedKmh: number | null = null;
     let actualPowerWatts: number | null = null;
     let actualTimeHours: number | null = null;
@@ -112,7 +117,7 @@ export function computePlanVsActualSections(
         // toKm è potenzialmente Infinity per l'ultimo bucket (bucketSamplesByBreakpoints non
         // conosce il traguardo del PIANO): clampato al confine pianificato per restare
         // coerente con "questa è la sezione pianificata da X a Y", non "tutto il resto del file".
-        const toKmClamped = Number.isFinite(bucket.toKm) ? Math.min(bucket.toKm, toKm) : toKm;
+        const toKmClamped = Number.isFinite(bucket.toKm) ? Math.min(bucket.toKm, pr.to.distKm) : pr.to.distKm;
         const durationSec = nearestPointTimeSec(activityPoints, toKmClamped) - nearestPointTimeSec(activityPoints, bucket.fromKm);
         if (durationSec > 0) actualTimeHours = durationSec / 3600;
       }
@@ -123,18 +128,56 @@ export function computePlanVsActualSections(
         actualWindUsedSamples = windEst.usedSamples;
       }
     }
+    return { actualSpeedKmh, actualPowerWatts, actualTimeHours, actualWindHeadwindKmh, actualWindUsedSamples };
+  });
+
+  // "Verifica dati": UNA simulazione dinamica continua su tutto il piano (l'inerzia si porta
+  // dietro da una sezione alla successiva, come per `plannedResults`), usando la potenza
+  // MEDIA REALE dove disponibile e quella pianificata come riserva altrove (per non spezzare
+  // la catena) — poi si legge la velocità media simulata in ciascuna sezione. Sostituisce il
+  // vecchio calcolo per equilibrio istantaneo (`speedFromPower` sezione per sezione, ignorava
+  // l'inerzia fra una sezione e l'altra).
+  const verifySegments = plannedResults.map((pr, i) => ({
+    d0Km: pr.from.distKm,
+    d1Km: pr.to.distKm,
+    targetPowerW: actuals[i]!.actualPowerWatts ?? pr.powerWatts
+  }));
+  const verifySteps = simulateDynamicPacing(verifySegments, routePoints, params, {
+    dtSec: 1,
+    initialSpeedMS: 0,
+    windZones,
+    plannedStartMinuteOfDay,
+    gradientSmoothingM: smoothingWindowMeters
+  });
+  let verifyIdx = 0;
+
+  return plannedResults.map((pr, i) => {
+    const { actualSpeedKmh, actualPowerWatts, actualTimeHours, actualWindHeadwindKmh, actualWindUsedSamples } = actuals[i]!;
+    const fromKm = pr.from.distKm;
+    const toKm = pr.to.distKm;
 
     const deltaTimeHours = actualTimeHours != null ? actualTimeHours - pr.timeHours : null;
     const deltaSpeedPct = actualSpeedKmh != null && pr.speedKmh > 0 ? ((actualSpeedKmh - pr.speedKmh) / pr.speedKmh) * 100 : null;
     const deltaPowerPct = actualPowerWatts != null && pr.powerWatts > 0 ? ((actualPowerWatts - pr.powerWatts) / pr.powerWatts) * 100 : null;
     const deltaWindKmh = actualWindHeadwindKmh != null ? actualWindHeadwindKmh - pr.windHeadwindKmh : null;
 
-    // Ricostruisce lo STESSO effectiveParams usato internamente da computeSections per
-    // calcolare pr.speedKmh — pr.windHeadwindKmh è già il valore corretto in entrambi i
-    // rami (con o senza zone vento), quindi questo riproduce esattamente lo stesso contesto
-    // fisico senza dover esportare effectiveParams da computeSections.
-    const effectiveParamsForVerify: PhysicsParams = { ...params, windKmh: pr.windHeadwindKmh };
-    const verifiedSpeedKmh = actualPowerWatts != null ? speedFromPower(actualPowerWatts, pr.gradient, effectiveParamsForVerify) * 3.6 : null;
+    let verifiedSpeedKmh: number | null = null;
+    if (actualPowerWatts != null) {
+      while (verifyIdx < verifySteps.length && verifySteps[verifyIdx]!.distKm < fromKm) verifyIdx++;
+      const inSection: number[] = [];
+      let p = verifyIdx;
+      while (p < verifySteps.length && verifySteps[p]!.distKm < toKm) {
+        inSection.push(verifySteps[p]!.speedMS);
+        p++;
+      }
+      // Fallback sull'equilibrio puntuale se la simulazione non ha ancora coperto la sezione
+      // (stesso limite noto già documentato per `computeDynamicSections`).
+      const effectiveParamsForVerify: PhysicsParams = { ...params, windKmh: pr.windHeadwindKmh };
+      verifiedSpeedKmh =
+        inSection.length > 0
+          ? (inSection.reduce((s, x) => s + x, 0) / inSection.length) * 3.6
+          : speedFromPower(actualPowerWatts, pr.gradient, effectiveParamsForVerify) * 3.6;
+    }
 
     return {
       index: i + 1,
@@ -194,13 +237,14 @@ export interface PlanVsActualFinePoint {
   plannedPowerWatts: number;
   actualSpeedKmh: number | null;
   actualPowerWatts: number | null;
-  /** "Verifica dati" a livello di microsezione: velocità che il modello fisico predice
-   * usando la potenza REALE di questo bin (non quella pianificata), con la STESSA pendenza,
-   * vento e CdA effettivi già usati per `plannedSpeedKmh` — cambia solo l'input potenza.
-   * A differenza del bottone "Verifica dati" delle sezioni macro (che sovrascrive il piano
-   * persistito, impraticabile qui: centinaia di micro-bin non possono diventare breakpoint),
-   * questo campo è puramente calcolato per il confronto, non tocca nulla di persistito.
-   * `null` quando il bin non ha un campione di potenza reale (nessun dato da verificare). */
+  /** "Verifica dati" a livello di microsezione: velocità che il motore dinamico predice
+   * usando la potenza REALE di questo bin (non quella pianificata) — UNA simulazione
+   * continua sul tratto coperto da dati reali (l'inerzia si porta dietro da un bin al
+   * successivo, come deve), poi mediata per bin solo per il confronto/display. A differenza
+   * del bottone "Verifica dati" delle sezioni macro (che sovrascrive il piano persistito,
+   * impraticabile qui: centinaia di micro-bin non possono diventare breakpoint), questo
+   * campo è puramente calcolato per il confronto, non tocca nulla di persistito. `null`
+   * quando il bin non ha un campione di potenza reale (nessun dato da verificare). */
   verifiedSpeedKmh: number | null;
   /** Raggio di curvatura stimato del percorso in questo bin (m), `Infinity` se il tratto è
    * sostanzialmente dritto. Diagnostico (F3.15): serve a distinguere una vera frenata per
@@ -210,13 +254,6 @@ export interface PlanVsActualFinePoint {
   /** Velocità massima "di sicurezza" in curva a questo raggio (km/h), `Infinity` se dritto —
    * vedi `maxCorneringSpeedKmh` in physics-core per il significato di questo limite. */
   maxCorneringSpeedKmh: number;
-  /** Come `verifiedSpeedKmh` (STESSA potenza reale in ingresso, STESSA fisica di base) ma
-   * calcolata dal motore dinamico (F3.16/F3.17: integrazione nel tempo con inerzia) invece
-   * che dall'equilibrio stazionario — a differenza di `verifiedSpeedKmh`, qui il bin NON è
-   * indipendente dai vicini: la simulazione è continua su tutto il tratto coperto da dati
-   * reali, poi mediata per bin solo per il confronto/display. `null` quando non ci sono
-   * abbastanza campioni reali per simulare (stesse condizioni di `verifiedSpeedKmh`). */
-  dynamicVerifiedSpeedKmh: number | null;
 }
 
 function findCoveringPair(sorted: SectionBreakpoint[], distKm: number): [SectionBreakpoint, SectionBreakpoint] {
@@ -232,7 +269,9 @@ function findCoveringPair(sorted: SectionBreakpoint[], distKm: number): [Section
  * per sezioni, qui il valore pianificato NON è la media della sezione ma il risultato
  * puntuale della potenza/velocità target della sezione applicata alla pendenza e al vento
  * locali del bin — più fedele a cosa il piano "prevede davvero" lungo un tratto non
- * uniforme (es. potenza costante in salita → velocità che varia col pendio).
+ * uniforme (es. potenza costante in salita → velocità che varia col pendio). Il motore è
+ * SEMPRE quello dinamico (D43, unico motore fisico in tutta l'app) per sia "Pianificata" sia
+ * "Verificata".
  *
  * NB: il vento qui usa `windAtDistKm` (via `buildFineGrid`), non la variante time-aware —
  * stessa scelta già fatta per l'ottimizzatore fine-grid esistente, per coerenza. Il confronto
@@ -247,10 +286,36 @@ export function computePlanVsActualFineGrid(
   windZones: WindZoneBoundary[] | undefined,
   totalDistanceKm: number,
   actualSamples: CdaSample[],
-  stepKm = 0.25
+  stepKm = 0.25,
+  smoothingWindowMeters?: number
 ): PlanVsActualFinePoint[] {
   const sorted = [...breakpoints].sort((a, b) => a.distKm - b.distKm);
   const fineSegs = buildFineGrid(totalDistanceKm, stepKm, routePoints, windZones);
+
+  // Potenza target per bin — SEMPRE quella pianificata (stesso calcolo di prima, invariato):
+  // è un input del piano, non dipende dal motore fisico. Precalcolata qui perché la
+  // simulazione dinamica sotto ne ha bisogno tutta insieme PRIMA di partire (una sola
+  // simulazione continua, non una per bin).
+  const plannedPowerPerBin = fineSegs.map(seg => {
+    const midKm = (seg.d0Km + seg.d1Km) / 2;
+    const [, to] = findCoveringPair(sorted, midKm);
+    const effectiveParams: PhysicsParams = seg.windKmh !== undefined ? { ...params, windKmh: seg.windKmh } : params;
+    return calcMode === 'power' ? (to.powerWatts ?? defaultPowerWatts) : powerFromSpeed((to.speedKmh ?? 0) / 3.6, seg.gradient, effectiveParams);
+  });
+
+  // Stesso limite già noto e documentato per il resto di questa funzione (vedi NB sopra):
+  // vento statico per zona, non time-aware — coerenza con `buildFineGrid`/l'ottimizzatore
+  // fine-grid, non una nuova approssimazione introdotta qui.
+  const plannedDynamicSteps =
+    fineSegs.length > 0
+      ? simulateDynamicPacing(
+          fineSegs.map((seg, i) => ({ d0Km: seg.d0Km, d1Km: seg.d1Km, targetPowerW: plannedPowerPerBin[i]! })),
+          routePoints,
+          params,
+          { dtSec: 1, initialSpeedMS: 0, windZones, gradientSmoothingM: smoothingWindowMeters }
+        )
+      : [];
+  let plannedDynIdx = 0;
 
   const sortedSamples = actualSamples
     .filter((s): s is CdaSample & { distKm: number } => s.distKm != null)
@@ -259,36 +324,38 @@ export function computePlanVsActualFineGrid(
 
   // Simulazione dinamica CONTINUA sui dati reali (F3.17): un segmento per ogni coppia di
   // campioni reali consecutivi, potenza = quella del campione — copre esattamente il tratto
-  // con dati reali, senza inventare potenza dove non ce n'è. A differenza di `verifiedSpeedKmh`
-  // (calcolato bin per bin, indipendentemente), questa è UNA sola simulazione su tutto il
-  // tratto: l'inerzia si porta dietro da un bin al successivo, come deve. Il risultato viene
-  // poi mediato per bin più sotto, solo per il confronto — la simulazione stessa non lavora a
-  // bin. Stesso limite già noto di `simulateDynamicPacing`: vento scalare, non per zona.
+  // con dati reali, senza inventare potenza dove non ce n'è. L'inerzia si porta dietro da un
+  // bin al successivo, come deve. Il risultato viene poi mediato per bin più sotto, solo per
+  // il confronto — la simulazione stessa non lavora a bin.
   const dynamicSteps =
     sortedSamples.length >= 2
       ? simulateDynamicPacing(
           sortedSamples.slice(0, -1).map((s, i) => ({ d0Km: s.distKm, d1Km: sortedSamples[i + 1]!.distKm, targetPowerW: s.powerW })),
           routePoints,
           params,
-          { dtSec: 1, initialSpeedMS: 0 }
+          { dtSec: 1, initialSpeedMS: 0, windZones, gradientSmoothingM: smoothingWindowMeters }
         )
       : [];
   let dynIdx = 0;
 
-  return fineSegs.map(seg => {
+  return fineSegs.map((seg, segIdx) => {
     const midKm = (seg.d0Km + seg.d1Km) / 2;
-    const [, to] = findCoveringPair(sorted, midKm);
     const effectiveParams: PhysicsParams = seg.windKmh !== undefined ? { ...params, windKmh: seg.windKmh } : params;
 
-    let plannedSpeedKmh: number;
-    let plannedPowerWatts: number;
-    if (calcMode === 'power') {
-      plannedPowerWatts = to.powerWatts ?? defaultPowerWatts;
-      plannedSpeedKmh = speedFromPower(plannedPowerWatts, seg.gradient, effectiveParams) * 3.6;
-    } else {
-      plannedSpeedKmh = to.speedKmh ?? 0;
-      plannedPowerWatts = powerFromSpeed(plannedSpeedKmh / 3.6, seg.gradient, effectiveParams);
+    const plannedPowerWatts = plannedPowerPerBin[segIdx]!; // sempre il target, invariato per motore
+    while (plannedDynIdx < plannedDynamicSteps.length && plannedDynamicSteps[plannedDynIdx]!.distKm < seg.d0Km) plannedDynIdx++;
+    const inBinSpeeds: number[] = [];
+    let p = plannedDynIdx;
+    while (p < plannedDynamicSteps.length && plannedDynamicSteps[p]!.distKm < seg.d1Km) {
+      inBinSpeeds.push(plannedDynamicSteps[p]!.speedMS);
+      p++;
     }
+    // Fallback sull'equilibrio puntuale se la simulazione non ha ancora coperto questo bin
+    // (stesso limite/stessa scelta di `computeDynamicSections` — vedi lì per i dettagli).
+    const plannedSpeedKmh =
+      inBinSpeeds.length > 0
+        ? (inBinSpeeds.reduce((s, x) => s + x, 0) / inBinSpeeds.length) * 3.6
+        : speedFromPower(plannedPowerWatts, seg.gradient, effectiveParams) * 3.6;
 
     while (sampleIdx < sortedSamples.length && sortedSamples[sampleIdx]!.distKm < seg.d0Km) sampleIdx++;
     const inBin: CdaSample[] = [];
@@ -302,11 +369,9 @@ export function computePlanVsActualFineGrid(
     let actualPowerWatts: number | null = null;
     if (inBin.length > 0) {
       actualSpeedKmh = (inBin.reduce((s, x) => s + x.speedMS, 0) / inBin.length) * 3.6;
-      const p = inBin.filter(s => s.powerW > 0);
-      actualPowerWatts = p.length > 0 ? p.reduce((s, x) => s + x.powerW, 0) / p.length : null;
+      const pow = inBin.filter(s => s.powerW > 0);
+      actualPowerWatts = pow.length > 0 ? pow.reduce((s, x) => s + x.powerW, 0) / pow.length : null;
     }
-
-    const verifiedSpeedKmh = actualPowerWatts != null ? speedFromPower(actualPowerWatts, seg.gradient, effectiveParams) * 3.6 : null;
 
     while (dynIdx < dynamicSteps.length && dynamicSteps[dynIdx]!.distKm < seg.d0Km) dynIdx++;
     const dynInBin: number[] = [];
@@ -315,7 +380,14 @@ export function computePlanVsActualFineGrid(
       dynInBin.push(dynamicSteps[k]!.speedMS);
       k++;
     }
-    const dynamicVerifiedSpeedKmh = dynInBin.length > 0 ? (dynInBin.reduce((s, x) => s + x, 0) / dynInBin.length) * 3.6 : null;
+    // Fallback sull'equilibrio puntuale se il bin ha potenza reale ma la simulazione
+    // continua non lo ha coperto (es. buco nei campioni) — stesso spirito del fallback sopra.
+    const verifiedSpeedKmh =
+      dynInBin.length > 0
+        ? (dynInBin.reduce((s, x) => s + x, 0) / dynInBin.length) * 3.6
+        : actualPowerWatts != null
+          ? speedFromPower(actualPowerWatts, seg.gradient, effectiveParams) * 3.6
+          : null;
 
     const ele = getInterpolatedPoint(routePoints, midKm * 1000).ele;
     const curveRadiusM = estimateCurveRadiusM(routePoints, midKm);
@@ -333,8 +405,7 @@ export function computePlanVsActualFineGrid(
       actualPowerWatts,
       verifiedSpeedKmh,
       curveRadiusM,
-      maxCorneringSpeedKmh,
-      dynamicVerifiedSpeedKmh
+      maxCorneringSpeedKmh
     };
   });
 }

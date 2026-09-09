@@ -145,7 +145,7 @@ describe('SectionPlanSchema — plannedStartTime e windZones.timeSamples', () =>
     expect(parsed.windZones[1]!.timeSamples).toEqual([]);
   });
 
-  it('pacingStepMeters è 100 di default se non specificato', () => {
+  it('smoothingWindowMeters è 50 di default se non specificato', () => {
     const now = nowIso();
     const parsed = SectionPlanSchema.parse({
       id: 'sp1',
@@ -158,10 +158,10 @@ describe('SectionPlanSchema — plannedStartTime e windZones.timeSamples', () =>
       defaultSpeedKmh: 40,
       breakpoints: validBreakpoints
     });
-    expect(parsed.pacingStepMeters).toBe(100);
+    expect(parsed.smoothingWindowMeters).toBe(50);
   });
 
-  it('accetta un pacingStepMeters valido esplicito', () => {
+  it('accetta uno smoothingWindowMeters valido esplicito, a gradini di 10', () => {
     const now = nowIso();
     const parsed = SectionPlanSchema.parse({
       id: 'sp1',
@@ -173,12 +173,12 @@ describe('SectionPlanSchema — plannedStartTime e windZones.timeSamples', () =>
       calcMode: 'speed',
       defaultSpeedKmh: 40,
       breakpoints: validBreakpoints,
-      pacingStepMeters: 500
+      smoothingWindowMeters: 0
     });
-    expect(parsed.pacingStepMeters).toBe(500);
+    expect(parsed.smoothingWindowMeters).toBe(0);
   });
 
-  it('rifiuta un pacingStepMeters sotto i 50m', () => {
+  it('rifiuta uno smoothingWindowMeters oltre i 100m o non multiplo di 10', () => {
     const now = nowIso();
     expect(() =>
       SectionPlanSchema.parse({
@@ -191,7 +191,21 @@ describe('SectionPlanSchema — plannedStartTime e windZones.timeSamples', () =>
         calcMode: 'speed',
         defaultSpeedKmh: 40,
         breakpoints: validBreakpoints,
-        pacingStepMeters: 10
+        smoothingWindowMeters: 150
+      })
+    ).toThrow();
+    expect(() =>
+      SectionPlanSchema.parse({
+        id: 'sp1',
+        schemaVersion: 1,
+        createdAt: now,
+        updatedAt: now,
+        routeId: 'route-1',
+        name: 'Piano gara',
+        calcMode: 'speed',
+        defaultSpeedKmh: 40,
+        breakpoints: validBreakpoints,
+        smoothingWindowMeters: 33
       })
     ).toThrow();
   });

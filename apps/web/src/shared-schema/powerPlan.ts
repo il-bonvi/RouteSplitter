@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { EntityBaseSchema, IdSchema } from './common.js';
 
-/** Un segmento della griglia fine calcolata dall'ottimizzatore (vedi physics-core optimizePacing). */
+/** Un segmento della griglia fine calcolata da un ottimizzatore di pacing (vedi physics-core). */
 export const FineGridSegmentSchema = z.object({
   d0Km: z.number().min(0),
   d1Km: z.number().min(0),
@@ -13,10 +13,13 @@ export const FineGridSegmentSchema = z.object({
 export type FineGridSegment = z.infer<typeof FineGridSegmentSchema>;
 
 /**
- * Piano potenza persistito: risultato di optimizePacing() su una griglia fine, associato
- * a un SectionPlan. Un SectionPlan può avere più PowerPlan nel tempo (es. target diversi
- * provati in fasi di what-if, Fase 1 roadmap F1.3) — anche questa un'entità separata,
+ * Piano potenza persistito: risultato di un ottimizzatore di pacing su una griglia fine,
+ * associato a un SectionPlan. Un SectionPlan può avere più PowerPlan nel tempo (es. target
+ * diversi provati in fasi di what-if, Fase 1 roadmap F1.3) — anche questa un'entità separata,
  * non annidata, per lo stesso motivo di SectionPlan rispetto a Route.
+ * NB: schema definito ma non ancora collegato a nessun componente UI/repository attivo
+ * (roadmap F1.3 non completata) — non confonderlo con il flusso di ottimizzazione realmente
+ * in uso (`SectionPlan.breakpoints`, `PacingOptimizerPanel`).
  */
 export const PowerPlanSchema = EntityBaseSchema.extend({
   sectionPlanId: IdSchema,

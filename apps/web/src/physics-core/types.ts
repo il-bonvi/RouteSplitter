@@ -1,4 +1,18 @@
 /**
+ * Parametri del modello di fatica Critical Power / W' (riserva anaerobica). Proprietà
+ * dell'ATLETA (come `riderMassKg`), non del piano — ma passati come vincolo opzionale
+ * all'ottimizzatore (`DynamicOptimizerConstraints.fatigue`), non dentro `PhysicsParams`:
+ * non hanno nulla a che fare con l'equilibrio aerodinamico/di massa che `PhysicsParams`
+ * modella, sono un vincolo energetico ortogonale.
+ */
+export interface FatigueParams {
+  /** Critical Power, W — la potenza teoricamente sostenibile indefinitamente. */
+  criticalPowerW: number;
+  /** W', Joule — la riserva di lavoro anaerobico disponibile sopra CP. */
+  wPrimeJ: number;
+}
+
+/**
  * Parametri fisici del modello di equilibrio delle forze (Martin et al.).
  * Un solo oggetto di questo tipo deve alimentare sia la predizione (velocità<->potenza)
  * sia la stima CdA sia l'ottimizzatore di pacing — mai istanze/copie divergenti.
@@ -41,7 +55,8 @@ export interface PowerSegment {
   windKmh?: number;
 }
 
-/** Segmento "grezzo" (senza potenza ancora assegnata) su cui far lavorare l'ottimizzatore. */
+/** Segmento "grezzo" (senza potenza ancora assegnata) — geometria di un tratto, pronta per
+ * essere data in pasto all'ottimizzatore dinamico (`optimizePacingDynamic`). */
 export interface OptimizableSegment {
   distanceKm: number;
   gradient: number;

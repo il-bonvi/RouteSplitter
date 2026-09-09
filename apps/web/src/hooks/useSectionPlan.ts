@@ -305,10 +305,13 @@ export function useSectionPlan(routeId: string | null, distanceKm: number) {
     [save]
   );
 
-  const setPacingStepMeters = useCallback(
-    async (pacingStepMeters: number) => {
-      if (!Number.isFinite(pacingStepMeters) || pacingStepMeters < 50) return;
-      await save({ pacingStepMeters });
+  /** A gradini di 10m (0=grezza, 10..100) — vedi commento sullo schema. Round-to-nearest-10
+   * difensivo, così un valore fuori griglia arrivato da un vecchio export non rompe la UI. */
+  const setSmoothingWindowMeters = useCallback(
+    async (smoothingWindowMeters: number) => {
+      if (!Number.isFinite(smoothingWindowMeters)) return;
+      const clamped = Math.min(100, Math.max(0, Math.round(smoothingWindowMeters / 10) * 10));
+      await save({ smoothingWindowMeters: clamped });
     },
     [save]
   );
@@ -340,6 +343,6 @@ export function useSectionPlan(routeId: string | null, distanceKm: number) {
     resetWindZones,
     clearWindZones,
     setPlannedStartTime,
-    setPacingStepMeters
+    setSmoothingWindowMeters
   };
 }

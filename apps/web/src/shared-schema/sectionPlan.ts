@@ -75,11 +75,15 @@ export const SectionPlanSchema = EntityBaseSchema.extend({
    */
   plannedStartTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().default(null),
   /**
-   * Passo (metri) della griglia fine usata dall'ottimizzatore di pacing ("Ottimizza completo").
-   * Unica fonte di verità: anche il confronto a microsezioni (Tab 3) usa questo stesso valore,
-   * per evitare che i due si disallineino mostrando griglie diverse da quella su cui si ottimizza.
+   * Finestra (metri) di smoothing della pendenza locale, a gradini di 10m: 0 = grezza (nessuno
+   * smoothing, un punto ogni cambio del GPX), 10, 20, ... fino a 100m — stesso spirito della
+   * granularità che si vede scorrendo il grafico d3.js dell'altimetria. Usata dal motore
+   * dinamico (D43) per smussare il rumore GPS/quota, e come granularità della griglia su cui
+   * lavora l'ottimizzatore dinamico ("Ottimizza completo") — un solo parametro per entrambi gli
+   * usi, dato che con un solo motore fisico non ha più senso tenerli separati (era
+   * `pacingStepMeters`, 50-5000m, legato al vecchio ottimizzatore a microsezioni ora rimosso).
    */
-  pacingStepMeters: z.number().min(50).max(5000).default(100)
+  smoothingWindowMeters: z.number().min(0).max(100).multipleOf(10).default(50)
 })
   .refine(val => startsAndEndsFixed(val.breakpoints), {
     message: 'Il primo breakpoint deve essere "start" e l\'ultimo "finish".'
@@ -105,7 +109,7 @@ export const CreateSectionPlanInputSchema = z
     breakpoints: z.array(BreakpointSchema).min(2),
     windZones: z.array(WindZoneBoundarySchema).default([]),
     plannedStartTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().default(null),
-    pacingStepMeters: z.number().min(50).max(5000).default(100)
+    smoothingWindowMeters: z.number().min(0).max(100).multipleOf(10).default(50)
   })
   .refine(val => startsAndEndsFixed(val.breakpoints), {
     message: 'Il primo breakpoint deve essere "start" e l\'ultimo "finish".'

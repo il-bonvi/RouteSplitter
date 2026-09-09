@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import * as d3 from 'd3';
-import { getInterpolatedPoint, speedFromPower, type PhysicsParams, type ProcessedPoint } from '@physics-core';
+import { getInterpolatedPoint, speedFromPower, computeWBalFromSteps, minWBalJ, type PhysicsParams, type ProcessedPoint, type FatigueParams } from '@physics-core';
 import type { FineSegment } from '../lib/pacingActions.js';
 import { formatTime } from '../lib/formatTime.js';
 
@@ -11,6 +11,9 @@ interface PowerPlanModalProps {
   powers: number[];
   physicsParams: PhysicsParams;
   processedPoints: ProcessedPoint[];
+  /** CP/W' dell'atleta (D48), opzionale — se fornito, il grafico aggiunge la curva del W'bal
+   * residuo lungo il percorso. Se assente, il grafico si comporta esattamente come prima. */
+  fatigue?: FatigueParams;
 }
 
 interface PowerSample {
@@ -70,7 +73,7 @@ function rollingAvgPower(samples: PowerSample[], windowSec: number): number[] {
   return out;
 }
 
-export function PowerPlanModal({ open, onClose, segs, powers, physicsParams, processedPoints }: PowerPlanModalProps) {
+export function PowerPlanModal({ open, onClose, segs, powers, physicsParams, processedPoints, fatigue }: PowerPlanModalProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [selectA, setSelectA] = useState(120);
   const [selectB, setSelectB] = useState(300);
@@ -85,6 +88,15 @@ export function PowerPlanModal({ open, onClose, segs, powers, physicsParams, pro
     [open, segs, powers, physicsParams, processedPoints]
   );
 
+  // W'bal residuo (D48), solo se CP/W' sono impostati — la serie di samples ha durata variabile
+  // per campione (più fitta dove si va piano), quindi `computeWBalFromSteps` deriva il passo
+  // dalle differenze fra `tSec` consecutivi invece di assumerne uno fisso (vedi lì).
+  const wbalSeries = useMemo(() => {
+    if (!open || !fatigue || samples.length === 0) return null;
+    const steps = samples.map(s => ({ timeSec: s.tSec, distKm: s.distKm, speedMS: 0, gradientPct: 0, powerW: s.power }));
+    return computeWBalFromSteps(steps, fatigue);
+  }, [open, samples, fatigue]);
+
   const [stats, setStats] = useState<string | null>(null);
 
   useEffect(() => {
@@ -93,12 +105,16 @@ export function PowerPlanModal({ open, onClose, segs, powers, physicsParams, pro
     if (!host || samples.length === 0) return;
     host.innerHTML = '';
 
+    // Stessa cautela di ActivityElevationChart: nessuna error boundary nell'app, un'eccezione
+    // qui dentro (D3 imperativo) farebbe sparire tutto, non solo questo modal.
+    try {
+
     const rollA = rollingAvgPower(samples, winA);
     const rollB = rollingAvgPower(samples, winB);
 
     const W = host.clientWidth || 1000;
     const H = 420;
-    const margin = { top: 24, right: 56, bottom: 40, left: 52 };
+    const margin = { top: 24, right: wbalSeries ? 92 : 56, bottom: 40, left: 52 };
     const width = W - margin.left - margin.right;
     const height = H - margin.top - margin.bottom;
 
@@ -118,6 +134,17 @@ export function PowerPlanModal({ open, onClose, segs, powers, physicsParams, pro
       (d3.max(rollB) ?? 0) * 1.15
     );
     const yPow = d3.scaleLinear().domain([0, maxPow]).nice().range([height, 0]);
+    // Il W'bal parte dal pieno (fatigue.wPrimeJ) e può scendere sotto zero (segnala
+    // infattibilità) — il dominio copre sempre lo zero, con un po' di margine sopra il pieno e
+    // sotto il minimo raggiunto, cosicché un eventuale sconfinamento sotto zero resti visibile
+    // invece di uscire dal grafico.
+    const yWBal = wbalSeries
+      ? d3
+          .scaleLinear()
+          .domain([Math.min(0, d3.min(wbalSeries) ?? 0) - 500, (fatigue?.wPrimeJ ?? 0) * 1.05])
+          .nice()
+          .range([height, 0])
+      : null;
 
     g.append('g')
       .attr('transform', `translate(0,${height})`)
@@ -194,6 +221,39 @@ export function PowerPlanModal({ open, onClose, segs, powers, physicsParams, pro
           .curve(d3.curveMonotoneX)
       );
 
+    if (wbalSeries && yWBal) {
+      const wbalData = samples.map((d, i) => ({ distKm: d.distKm, w: wbalSeries[i]! }));
+      // Linea dello zero: sotto questa soglia il piano esaurisce la riserva — il riferimento
+      // visivo più importante del grafico quando c'è un vincolo di fatica attivo.
+      g.append('line')
+        .attr('x1', 0)
+        .attr('x2', width)
+        .attr('y1', yWBal(0))
+        .attr('y2', yWBal(0))
+        .attr('stroke', '#ef4444')
+        .attr('stroke-width', 1)
+        .attr('stroke-dasharray', '3,3')
+        .attr('opacity', 0.6);
+      g.append('path')
+        .datum(wbalData)
+        .attr('fill', 'none')
+        .attr('stroke', '#34d399')
+        .attr('stroke-width', 2)
+        .attr(
+          'd',
+          d3
+            .line<{ distKm: number; w: number }>()
+            .x(d => x(d.distKm))
+            .y(d => yWBal(d.w))
+            .curve(d3.curveMonotoneX)
+        );
+      g.append('g')
+        .attr('transform', `translate(${width + 44},0)`)
+        .call(d3.axisRight(yWBal).ticks(6).tickFormat(d => `${((d as number) / 1000).toFixed(0)} kJ`))
+        .selectAll('text')
+        .attr('fill', '#34d399');
+    }
+
     g.append('g')
       .attr('transform', `translate(0,${height})`)
       .call(d3.axisBottom(x).ticks(10).tickFormat(d => `${(d as number).toFixed(1)} km`))
@@ -214,6 +274,7 @@ export function PowerPlanModal({ open, onClose, segs, powers, physicsParams, pro
     const fRollA = focus.append('circle').attr('r', 4).attr('fill', '#a646e6');
     const fRollB = focus.append('circle').attr('r', 4).attr('fill', '#00e5ff');
     const fPow = focus.append('circle').attr('r', 3).attr('fill', '#f59e0b');
+    const fWBal = wbalSeries ? focus.append('circle').attr('r', 4).attr('fill', '#34d399') : null;
 
     const tip = d3
       .select(host)
@@ -260,11 +321,13 @@ export function PowerPlanModal({ open, onClose, segs, powers, physicsParams, pro
         fRollA.attr('cy', yPow(rollA[best]!));
         fRollB.attr('cy', yPow(rollB[best]!));
         fPow.attr('cy', yPow(s.power));
+        if (fWBal && wbalSeries && yWBal) fWBal.attr('cy', yWBal(wbalSeries[best]!));
         tip.html(
           `<strong>${s.distKm.toFixed(2)} km</strong> · ${Math.round(s.ele)} m · t=${formatTime(s.tSec / 3600)}<br>` +
             `Potenza: <strong>${Math.round(s.power)} W</strong><br>` +
             `Media ${winA}s: <strong>${Math.round(rollA[best]!)} W</strong><br>` +
-            `Media ${winB}s: <strong>${Math.round(rollB[best]!)} W</strong>`
+            `Media ${winB}s: <strong>${Math.round(rollB[best]!)} W</strong>` +
+            (wbalSeries ? `<br>W'bal: <strong>${(wbalSeries[best]! / 1000).toFixed(1)} kJ</strong>` : '')
         );
         // Il tooltip di default sta a destra del punto sotto il cursore. Vicino al bordo destro
         // del grafico questo lo faceva uscire dal contenitore, che lo "schiacciava" (larghezza
@@ -280,14 +343,20 @@ export function PowerPlanModal({ open, onClose, segs, powers, physicsParams, pro
 
     const meanA = rollA.reduce((a, b) => a + b, 0) / rollA.length;
     const meanB = rollB.reduce((a, b) => a + b, 0) / rollB.length;
+    const wbalNote = wbalSeries ? ` · W'bal min ${(minWBalJ(wbalSeries) / 1000).toFixed(1)} kJ` : '';
     setStats(
-      `A ${winA}s ≈ ${meanA.toFixed(0)} W · B ${winB}s ≈ ${meanB.toFixed(0)} W · durata ${formatTime(samples[samples.length - 1]!.tSec / 3600)}`
+      `A ${winA}s ≈ ${meanA.toFixed(0)} W · B ${winB}s ≈ ${meanB.toFixed(0)} W · durata ${formatTime(samples[samples.length - 1]!.tSec / 3600)}${wbalNote}`
     );
 
     return () => {
       tip.remove();
     };
-  }, [open, samples, winA, winB]);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[PowerPlanModal] errore nel disegno del grafico:', err);
+      return undefined;
+    }
+  }, [open, samples, winA, winB, wbalSeries, fatigue]);
 
   const exportPng = async () => {
     const host = hostRef.current;
@@ -337,7 +406,8 @@ export function PowerPlanModal({ open, onClose, segs, powers, physicsParams, pro
       { color: '#94a3b8', label: 'Altimetria' },
       { color: '#f59e0b', label: 'Potenza istantanea' },
       { color: '#a646e6', label: `Media ${winA}s` },
-      { color: '#00e5ff', label: `Media ${winB}s` }
+      { color: '#00e5ff', label: `Media ${winB}s` },
+      ...(wbalSeries ? [{ color: '#34d399', label: "W'bal residuo" }] : [])
     ];
     let lx = pad;
     const ly = pad + titleH + svgH + 22;
@@ -416,6 +486,12 @@ export function PowerPlanModal({ open, onClose, segs, powers, physicsParams, pro
             <i style={{ background: '#00e5ff' }} />
             Media {winB}s
           </span>
+          {wbalSeries && (
+            <span>
+              <i style={{ background: '#34d399' }} />
+              W'bal residuo
+            </span>
+          )}
           {stats && <span style={{ color: 'var(--accent4)' }}>{stats}</span>}
         </div>
       </div>

@@ -123,10 +123,10 @@ describe('planVsActualFineGridToCsv', () => {
     expect(lines).toHaveLength(1 + grid.length);
     expect(lines[0]).toContain('Pendenza (%)');
     expect(lines[0]).toContain('Quota (m)');
-    expect(lines[0]).toContain('Vel. verificata (dinamica) (km/h)');
-    // Con dati reali su un'uscita lunga, almeno un bin deve avere il valore dinamico popolato
+    expect(lines[0]).toContain('Vel. verificata - pot.reale (km/h)');
+    // Con dati reali su un'uscita lunga, almeno un bin deve avere il valore verificato popolato
     // (non solo header vuoto) — prova che la colonna porta davvero un numero, non solo un'etichetta.
-    expect(grid.some(p => p.dynamicVerifiedSpeedKmh != null)).toBe(true);
+    expect(grid.some(p => p.verifiedSpeedKmh != null)).toBe(true);
   });
 
   it('lascia la cella vuota quando manca il dato reale nel bin', () => {

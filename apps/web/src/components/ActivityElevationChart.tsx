@@ -9,8 +9,11 @@ import {
   windAtDistKm,
   routeBearingAtDistKm,
   effectiveHeadwindKmh,
+  computeWBalFromSteps,
+  minWBalJ,
   type SectionBreakpoint,
-  type ChartPoint
+  type ChartPoint,
+  type FatigueParams
 } from '@physics-core';
 import type { WindZoneBoundary } from '@shared-schema';
 import { getGradientColor } from '../lib/gradientColor.js';
@@ -60,6 +63,11 @@ interface ActivityElevationChartProps {
   /** Distanze (km) delle microsezioni automatiche (griglia fine F3.3), disegnate come tacche
    * verticali leggere. Vuoto/assente = nessuna tacca (comportamento invariato per F3.1). */
   microBoundariesKm?: number[];
+  /** CP/W' dell'atleta (D48), opzionale — se fornito E lo stream di potenza REALE è presente,
+   * disegna una terza curva col bilancio W' residuo calcolato dalla potenza reale (mai da
+   * quella pianificata: qui si vuole vedere cosa la fatica ha fatto DAVVERO, non una stima).
+   * Assente = comportamento identico a prima (nessuna riga, nessun asse in più). */
+  fatigue?: FatigueParams;
 }
 
 interface ChartDatum extends ChartPoint {
@@ -68,11 +76,21 @@ interface ChartDatum extends ChartPoint {
   lon: number;
   powerW: number | null;
   speedKmh: number | null;
+  timeSec: number;
+  /** W'bal (D48) a questo punto, dalla potenza REALE — `null` se `fatigue` non è fornito o non
+   * c'è potenza reale. Calcolato qui (non con un useMemo separato più a valle) perché
+   * `displayData` più sotto può essere un sottoinsieme (LTTB) di `fullData`: tenerlo come campo
+   * sullo stesso oggetto, invece che in un array parallelo, sopravvive automaticamente a
+   * qualunque sottocampionamento senza bisogno di ri-allinearlo per indice. */
+  wbalJ: number | null;
 }
 
-// Margine destro ulteriormente allargato (46 -> 82): deve ospitare DUE assi destri quando sia
-// potenza che velocità sono visibili insieme (F3.4/streams), non solo quello della potenza.
-const MARGIN = { top: 20, right: 82, bottom: 40, left: 55 };
+// Margine destro ulteriormente allargato: deve ospitare fino a TRE assi destri quando potenza,
+// velocità e W'bal (D48, opzionale) sono visibili insieme. Con meno assi attivi resta un po' di
+// spazio vuoto a destra — preferito a un margine dinamico che avrebbe richiesto rendere
+// dinamici anche W/H/TOTAL_W (costanti di modulo usate ovunque in questo file), rischio non
+// giustificato per un margine cosmetico.
+const MARGIN = { top: 20, right: 116, bottom: 40, left: 55 };
 
 // Colori degli stream dati (assi, linee, legenda, checkbox) — un'unica definizione condivisa.
 // Richiesta precisa: la potenza reale/pianificata avevano due tinte ben DIVERSE (arancio/blu)
@@ -84,6 +102,7 @@ const COLOR_POWER_REAL = '#4338ca';
 const COLOR_POWER_PLANNED = '#7c9cff';
 const COLOR_SPEED_REAL = '#10b981';
 const COLOR_SPEED_PLANNED = '#6ee7b7';
+const COLOR_WBAL = '#34d399';
 const TOTAL_W = 900;
 const TOTAL_H = 290;
 const W = TOTAL_W - MARGIN.left - MARGIN.right;
@@ -119,7 +138,8 @@ export function ActivityElevationChart({
   plannedSpeedSeries,
   plannedPowerLabel = 'pianificata',
   plannedSpeedLabel = 'pianificata',
-  microBoundariesKm
+  microBoundariesKm,
+  fatigue
 }: ActivityElevationChartProps) {
   // BUG REALE TROVATO (causa vera dell'hover che sparisce da fermo, mai davvero chiusa nei
   // giri precedenti): un default-parameter tipo `windZones = []` nella destrutturazione crea
@@ -150,6 +170,7 @@ export function ActivityElevationChart({
   const [showPowerPlanned, setShowPowerPlanned] = useState(true);
   const [showSpeedReal, setShowSpeedReal] = useState(true);
   const [showSpeedPlanned, setShowSpeedPlanned] = useState(true);
+  const [showWBal, setShowWBal] = useState(true);
   // Media mobile aggiuntiva, in SECONDI, applicata solo a potenza e velocità REALI — del
   // tutto indipendente dallo smoothing a metri qui sopra (che resta invariato, tocca solo
   // elevazione/pendenza/potenza a distanza fissa) e dalle serie pianificate (mai toccate).
@@ -200,19 +221,31 @@ export function ActivityElevationChart({
     const powerStreamSmooth = streamSmoothingSec > 0 ? smoothByTime(powerSmooth, timesSec, streamSmoothingSec) : powerSmooth;
     const speedStreamSmooth = streamSmoothingSec > 0 ? smoothByTime(speedFilled, timesSec, streamSmoothingSec) : speedFilled;
 
-    return sourcePoints.map((p, i) => ({
+    const base = sourcePoints.map((p, i) => ({
       dist: p.dist / 1000,
       ele: eleSmooth[i]!,
       gradient: gradSmooth[i]!,
       lat: p.lat,
       lon: p.lon,
       powerW: p.powerW != null ? powerStreamSmooth[i]! : null,
-      speedKmh: p.speedKmh != null ? speedStreamSmooth[i]! : null
+      speedKmh: p.speedKmh != null ? speedStreamSmooth[i]! : null,
+      timeSec: p.timeSec
     }));
-  }, [points, smoothingRadiusMeters, streamSmoothingSec]);
+
+    // W'bal (D48) dalla potenza REALE (mai da quella pianificata — qui si vuole vedere cosa la
+    // fatica ha fatto DAVVERO). Calcolato qui, come campo su ogni `ChartDatum` invece che in un
+    // array parallelo altrove: `displayData` più sotto può essere un sottoinsieme (LTTB) di
+    // `fullData`, e un campo sullo stesso oggetto sopravvive al sottocampionamento senza dover
+    // essere ri-allineato per indice. Zero costo se `fatigue` non è fornito o non c'è potenza.
+    const hasPowerLocal = base.some(d => d.powerW != null);
+    const wbalValues = fatigue && hasPowerLocal ? computeWBalFromSteps(base.map(d => ({ ...d, distKm: d.dist, speedMS: 0, gradientPct: 0, powerW: d.powerW ?? 0 })), fatigue) : null;
+
+    return base.map((d, i) => ({ ...d, wbalJ: wbalValues ? wbalValues[i]! : null }));
+  }, [points, smoothingRadiusMeters, streamSmoothingSec, fatigue]);
 
   const hasPower = useMemo(() => fullData.some(d => d.powerW != null), [fullData]);
   const hasSpeed = useMemo(() => fullData.some(d => d.speedKmh != null), [fullData]);
+  const hasWBal = useMemo(() => fullData.some(d => d.wbalJ != null), [fullData]);
 
   const windMaxAbs = useMemo(() => {
     if (safeWindZones.length < 2 || points.length < 2) return 0;
@@ -241,6 +274,16 @@ export function ActivityElevationChart({
     if (!container || fullData.length < 2) return;
     container.innerHTML = '';
     setSelectionStats(null);
+
+    // Il disegno qui sotto è tutto codice D3 imperativo, con parecchie derivazioni numeriche in
+    // sequenza (scale, domini, assi) — un valore inatteso in un punto qualsiasi (NaN, dominio
+    // degenere, ecc.) lancerebbe un'eccezione che, senza una error boundary da nessuna parte
+    // nell'app (verificato: non ce n'è una), farebbe sparire l'INTERO albero React, non solo
+    // questo grafico — inclusi i pulsanti di export e le tabelle qui accanto, pur essendo JSX
+    // dichiarativo indipendente da questo effetto. Un try/catch qui non risolve la causa di un
+    // eventuale bug (che va comunque diagnosticato), ma impedisce che un problema isolato in
+    // questo grafico si porti giù il resto della pagina.
+    try {
 
     const fullMaxDist = fullData[fullData.length - 1]!.dist;
     const isZoomed = !!zoomDomain;
@@ -290,6 +333,17 @@ export function ActivityElevationChart({
     // spegne/riaccende uno dei due toggle.
     const speedAxisOffset = powerAxisVisible ? 34 : 0;
 
+    // W'bal (D48): terzo asse destro, ulteriormente spostato oltre gli altri due se entrambi
+    // attivi. Dominio SEMPRE esteso fino a zero (anche se la serie non lo raggiunge mai) — lo
+    // zero è il riferimento fisiologico più importante di questo grafico, deve restare visibile
+    // anche quando la riserva non si è mai avvicinata al limite.
+    const wbalAxisVisible = showWBal && hasWBal;
+    const wbalAxisOffset = (powerAxisVisible ? 34 : 0) + (speedAxisVisible ? 34 : 0);
+    const wbalValues = fullData.filter(d => d.dist >= d0 && d.dist <= d1).map(d => d.wbalJ).filter((w): w is number => w != null);
+    const wbalMin = wbalValues.length > 0 ? Math.min(0, minWBalJ(wbalValues)) : 0;
+    const wbalMax = fatigue ? fatigue.wPrimeJ * 1.05 : 0;
+    const yScaleWBal = d3.scaleLinear().domain([wbalMin - 500, wbalMax || 1]).range([H, 0]);
+
     const svg = d3
       .select(container)
       .append('svg')
@@ -329,6 +383,23 @@ export function ActivityElevationChart({
         .selectAll('text')
         .style('font-size', '10px')
         .style('fill', COLOR_SPEED_REAL);
+    }
+    if (wbalAxisVisible) {
+      g.append('line')
+        .attr('x1', 0)
+        .attr('x2', W)
+        .attr('y1', yScaleWBal(0))
+        .attr('y2', yScaleWBal(0))
+        .attr('stroke', '#ef4444')
+        .attr('stroke-width', 1)
+        .attr('stroke-dasharray', '3,3')
+        .attr('opacity', 0.5);
+      g.append('g')
+        .attr('transform', `translate(${W + wbalAxisOffset},0)`)
+        .call(d3.axisRight(yScaleWBal).ticks(6).tickFormat(d => `${((d as number) / 1000).toFixed(0)} kJ`))
+        .selectAll('text')
+        .style('font-size', '10px')
+        .style('fill', COLOR_WBAL);
     }
 
     g.append('g')
@@ -423,6 +494,23 @@ export function ActivityElevationChart({
         .attr('opacity', 0.9)
         .attr('pointer-events', 'none')
         .attr('d', powerLine);
+    }
+
+    if (wbalAxisVisible) {
+      const wbalLine = d3
+        .line<ChartDatum>()
+        .defined(d => d.wbalJ != null)
+        .x(d => xScale(d.dist))
+        .y(d => yScaleWBal(d.wbalJ!))
+        .curve(d3.curveMonotoneX);
+      g.append('path')
+        .datum(displayData)
+        .attr('clip-path', 'url(#activity-elev-clip)')
+        .attr('fill', 'none')
+        .attr('stroke', COLOR_WBAL)
+        .attr('stroke-width', 2)
+        .attr('pointer-events', 'none')
+        .attr('d', wbalLine);
     }
 
     if (hasPlannedPower && showPowerPlanned) {
@@ -577,11 +665,13 @@ export function ActivityElevationChart({
       const sign = point.gradient > 0.05 ? '+' : '';
       const powerPart = point.powerW != null ? ` &nbsp;·&nbsp; ${Math.round(point.powerW)} W` : '';
       const speedPart = point.speedKmh != null ? ` &nbsp;·&nbsp; ${point.speedKmh.toFixed(1)} km/h` : '';
+      const wbalPart = point.wbalJ != null && showWBal ? ` &nbsp;·&nbsp; W'bal ${(point.wbalJ / 1000).toFixed(1)} kJ` : '';
       tooltip!.innerHTML =
         `↑ <b>${point.ele.toFixed(0)} m</b> &nbsp;·&nbsp; ${point.dist.toFixed(2)} km` +
         `<span style="display:inline-block;padding:1px 6px;border-radius:3px;background:${color};color:#fff;font-size:11px;font-weight:700;margin-left:6px;">${sign}${point.gradient.toFixed(1)}%</span>` +
         powerPart +
-        speedPart;
+        speedPart +
+        wbalPart;
       tooltip!.style.display = 'block';
       let tx = clientX + 16;
       let ty = clientY - 38;
@@ -656,6 +746,11 @@ export function ActivityElevationChart({
     return () => {
       tooltip!.style.display = 'none';
     };
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("[ActivityElevationChart] errore nel disegno del grafico (vedi commento sopra il try):", err);
+      return undefined;
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     fullData,
@@ -673,14 +768,17 @@ export function ActivityElevationChart({
     showPowerPlanned,
     showSpeedReal,
     showSpeedPlanned,
-    safeMicroBoundariesKm
+    safeMicroBoundariesKm,
+    hasWBal,
+    showWBal,
+    fatigue
   ]);
 
   if (points.length < 2) return null;
 
   const hasPlannedPower = safePlannedPowerSeries.length > 1;
   const hasPlannedSpeed = safePlannedSpeedSeries.length > 1;
-  const canToggleAnything = hasPower || hasPlannedPower || hasSpeed || hasPlannedSpeed;
+  const canToggleAnything = hasPower || hasPlannedPower || hasSpeed || hasPlannedSpeed || hasWBal;
 
   return (
     <>
@@ -754,6 +852,12 @@ export function ActivityElevationChart({
                     Velocità {plannedSpeedLabel}
                   </label>
                 )}
+                {hasWBal && (
+                  <label className="stream-toggle">
+                    <input type="checkbox" checked={showWBal} onChange={e => setShowWBal(e.target.checked)} />
+                    <i style={{ background: COLOR_WBAL }} /> W'bal residuo
+                  </label>
+                )}
               </div>
             )}
           </div>
@@ -811,6 +915,13 @@ export function ActivityElevationChart({
               velocità {plannedSpeedLabel}
             </span>
           )}
+        </div>
+      ) : null}
+      {showWBal && hasWBal ? (
+        <div className="wind-ribbon-legend elevation-wbal-legend">
+          <span>
+            <i style={{ background: COLOR_WBAL }} /> W'bal residuo
+          </span>
         </div>
       ) : null}
       {safeWindZones.length >= 2 && (

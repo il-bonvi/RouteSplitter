@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { processRoute, computeSections, parseClockTimeToMinutes, type ProcessedPoint } from '@physics-core';
+import { processRoute, computeDynamicSections, parseClockTimeToMinutes, type ProcessedPoint } from '@physics-core';
 import { DEFAULT_PHYSICS_PARAMS, type Route, type RawTrackPoint, type PhysicsParams } from '@shared-schema';
 import { useDataStore } from '../lib/DataStoreContext.js';
 import { useSectionPlan } from '../hooks/useSectionPlan.js';
@@ -35,6 +35,14 @@ export function RouteSplitterApp() {
   const [smoothingRadiusMeters, setSmoothingRadiusMeters] = useState(50);
   const [hoverPoint, setHoverPoint] = useState<{ lat: number; lon: number } | null>(null);
   const [physicsParams, setPhysicsParams] = useState<PhysicsParams>(DEFAULT_PHYSICS_PARAMS);
+  // CP/W' (D48): proprietà dell'ATLETA, non del piano — per questo non dentro physicsParams
+  // (che modella solo l'equilibrio aerodinamico/di massa). Sollevato qui (come physicsParams,
+  // stesso pattern) perché serve sia al pannello ottimizzatore (Tab 1 e Tab 3) sia al grafico
+  // di confronto in Tab 3 (`ActivityElevationChart`) — nessuno dei due basta da solo come
+  // "proprietario" di questo stato. Non persistito, come physicsParams: si azzera al reload,
+  // comportamento esistente per questo genere di parametri, non una scelta nuova di questo fix.
+  const [criticalPowerW, setCriticalPowerW] = useState<number | ''>('');
+  const [wPrimeJ, setWPrimeJ] = useState<number | ''>('');
   // Condivisa fra CdaEstimator (campione singolo) e CdaFromActivityCard (multi-punto da
   // file): stesso target 'base' | indice-soglia, stessa semantica di scrittura su cdaTiers.
   const applyCda = useCallback((cda: number, target: 'base' | number) => {
@@ -76,22 +84,29 @@ export function RouteSplitterApp() {
     removeWindTimeSample,
     resetWindZones,
     setPlannedStartTime,
-    setPacingStepMeters
+    setSmoothingWindowMeters
   } = useSectionPlan(selectedRoute?.id ?? null, selectedRoute?.distanceKm ?? 0);
 
   const defaultPowerWatts = plan?.defaultPowerWatts ?? 250;
   const startTime = plan?.plannedStartTime ?? '';
 
+  // Tempo/velocità PREVISTI mostrati in tutta la vista (StatsRow, grafico altimetria/potenza,
+  // tabella sezioni, report PDF) vengono SEMPRE dal motore dinamico (D43: rimosso il modello
+  // classico come opzione — un solo motore fisico in tutta l'app, nessun toggle). La finestra
+  // di smoothing pendenza (`smoothingWindowMeters`, 0-100m a gradini di 10) è l'unico
+  // parametro che il piano espone per calibrare quanto la simulazione segue fedelmente il
+  // profilo grezzo del GPX.
   const sections = useMemo(() => {
     if (!plan || processedPoints.length < 2) return [];
-    return computeSections(
+    return computeDynamicSections(
       plan.breakpoints,
       processedPoints,
       physicsParams,
       plan.calcMode,
       defaultPowerWatts,
       plan.windZones,
-      parseClockTimeToMinutes(plan.plannedStartTime)
+      parseClockTimeToMinutes(plan.plannedStartTime),
+      plan.smoothingWindowMeters
     );
   }, [plan, processedPoints, physicsParams, defaultPowerWatts]);
 
@@ -231,8 +246,8 @@ export function RouteSplitterApp() {
         if (parsed.plannedStartTime != null) {
           await setPlannedStartTime(parsed.plannedStartTime);
         }
-        if (parsed.pacingStepMeters != null) {
-          await setPacingStepMeters(parsed.pacingStepMeters);
+        if (parsed.smoothingWindowMeters != null) {
+          await setSmoothingWindowMeters(parsed.smoothingWindowMeters);
         }
         if (parsed.routeName) {
           const updated = await store.routes.update(selectedRoute.id, { name: parsed.routeName });
@@ -244,7 +259,7 @@ export function RouteSplitterApp() {
         setError(err instanceof Error ? err.message : 'Errore sconosciuto durante l\'importazione.');
       }
     },
-    [selectedRoute, plan, replaceBreakpoints, store, refreshRoutes, setPlannedStartTime, setPacingStepMeters]
+    [selectedRoute, plan, replaceBreakpoints, store, refreshRoutes, setPlannedStartTime, setSmoothingWindowMeters]
   );
 
   return (
@@ -267,7 +282,16 @@ export function RouteSplitterApp() {
 
       {activeTab === 'activity' && <ActivityAnalysisView physicsParams={physicsParams} onApplyCda={applyCda} />}
 
-      {activeTab === 'compare' && <PlanVsActualView physicsParams={physicsParams} onPhysicsParamsChange={setPhysicsParams} />}
+      {activeTab === 'compare' && (
+        <PlanVsActualView
+          physicsParams={physicsParams}
+          onPhysicsParamsChange={setPhysicsParams}
+          criticalPowerW={criticalPowerW}
+          onCriticalPowerWChange={setCriticalPowerW}
+          wPrimeJ={wPrimeJ}
+          onWPrimeJChange={setWPrimeJ}
+        />
+      )}
 
       {activeTab === 'route' && (
       !selectedRoute ? (
@@ -344,8 +368,13 @@ export function RouteSplitterApp() {
               totalDistanceKm={selectedRoute.distanceKm}
               windZones={plan.windZones}
               onApplyPowers={updates => void applyPowerUpdates(updates)}
-              stepMeters={plan.pacingStepMeters}
-              onStepMetersChange={v => void setPacingStepMeters(v)}
+              smoothingWindowMeters={plan.smoothingWindowMeters}
+              onSmoothingWindowMetersChange={v => void setSmoothingWindowMeters(v)}
+              plannedStartMinuteOfDay={parseClockTimeToMinutes(plan.plannedStartTime)}
+              criticalPowerW={criticalPowerW}
+              onCriticalPowerWChange={setCriticalPowerW}
+              wPrimeJ={wPrimeJ}
+              onWPrimeJChange={setWPrimeJ}
             />
           )}
 

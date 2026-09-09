@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { processRoute, computeSections, parseClockTimeToMinutes, type PhysicsParams, type ProcessedPoint, type SectionBreakpoint } from '@physics-core';
+import { processRoute, computeDynamicSections, parseClockTimeToMinutes, type PhysicsParams, type ProcessedPoint, type SectionBreakpoint, type FatigueParams } from '@physics-core';
 import type { Route } from '@shared-schema';
 import { useDataStore } from '../lib/DataStoreContext.js';
 import { useSectionPlan } from '../hooks/useSectionPlan.js';
@@ -10,7 +10,6 @@ import { computePlanVsActualSections, computePlanVsActualFineGrid, padSeriesToRo
 import { formatTime, formatDeltaTime } from '../lib/formatTime.js';
 import { planVsActualSectionsToCsv, planVsActualFineGridToCsv, energyBalanceToCsv, downloadTextFile } from '../lib/exportCsv.js';
 import { computeActivityEnergyBalance } from '../lib/energyBalance.js';
-import { computeDynamicVsClassicComparison } from '../lib/dynamicSimulation.js';
 import { RouteMap, type MapWindControlData } from './RouteMap.js';
 import { ActivityElevationChart } from './ActivityElevationChart.js';
 import { ElevationChart } from './ElevationChart.js';
@@ -25,6 +24,13 @@ import { CollapsibleSection } from './CollapsibleSection.js';
 interface PlanVsActualViewProps {
   physicsParams: PhysicsParams;
   onPhysicsParamsChange: (params: PhysicsParams) => void;
+  /** CP/W' (D48), sollevati a livello di app — vedi nota in `RouteSplitterApp.tsx`. Servono sia
+   * al pannello microsezioni qui sotto (stesso `PacingOptimizerPanel` di Tab 1) sia ai due
+   * `ActivityElevationChart` di questa vista (curva W'bal sullo stream di potenza reale). */
+  criticalPowerW: number | '';
+  onCriticalPowerWChange: (v: number | '') => void;
+  wPrimeJ: number | '';
+  onWPrimeJChange: (v: number | '') => void;
 }
 
 // Riferimento stabile per "nessun breakpoint" nel pannello microsezioni: un literal `[]`
@@ -91,11 +97,21 @@ function deltaTimeBadge(hours: number | null) {
  * costruire fiducia (o diffidenza) su questa stima prima di un'eventuale integrazione
  * forecast automatica.
  */
-export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanVsActualViewProps) {
+export function PlanVsActualView({ physicsParams, onPhysicsParamsChange, criticalPowerW, onCriticalPowerWChange, wPrimeJ, onWPrimeJChange }: PlanVsActualViewProps) {
   const store = useDataStore();
   const [routes, setRoutes] = useState<Route[]>([]);
   const [selectedRouteId, setSelectedRouteId] = useState<string>('');
   const [routePoints, setRoutePoints] = useState<ProcessedPoint[] | null>(null);
+
+  // Vedi nota nei props: CP/W' sono sollevati a livello di app (RouteSplitterApp), qui solo
+  // derivati nella forma che serve a `optimizePacingDynamic`/`ActivityElevationChart`.
+  const fatigue: FatigueParams | undefined = useMemo(
+    () =>
+      criticalPowerW !== '' && wPrimeJ !== '' && criticalPowerW > 0 && wPrimeJ > 0
+        ? { criticalPowerW, wPrimeJ }
+        : undefined,
+    [criticalPowerW, wPrimeJ]
+  );
 
   const selectedRoute = routes.find(r => r.id === selectedRouteId) ?? null;
   // Nome file sicuro per gli export CSV (F3.3): stessa sanificazione usata per l'export JSON
@@ -120,7 +136,7 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
     removeWindTimeSample,
     resetWindZones,
     setPlannedStartTime,
-    setPacingStepMeters
+    setSmoothingWindowMeters
   } = useSectionPlan(selectedRouteId || null, selectedRoute?.distanceKm ?? 0);
 
   // Editing del piano pianificato (percorso) — stessi controlli della tab "Percorso", ma
@@ -151,8 +167,8 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
   const [microOpen, setMicroOpen] = useState(false);
   // Non più uno stato indipendente: il passo delle microsezioni DEVE coincidere con quello su
   // cui lavora l'ottimizzatore di pacing ("Ottimizza completo"), altrimenti il grafico non
-  // dimostrerebbe le sezioni realmente scelte. Unica fonte di verità: plan.pacingStepMeters.
-  const microStepKm = (plan?.pacingStepMeters ?? 100) / 1000;
+  // dimostrerebbe le sezioni realmente scelte. Unica fonte di verità: plan.smoothingWindowMeters.
+  const microStepKm = Math.max(10, plan?.smoothingWindowMeters ?? 50) / 1000;
   const [microHoverPoint, setMicroHoverPoint] = useState<{ lat: number; lon: number } | null>(null);
   const [microSmoothingRadiusMeters, setMicroSmoothingRadiusMeters] = useState(50);
 
@@ -164,14 +180,6 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
   // spaziale). Vedi `src/lib/energyBalance.ts` per il perché dei default.
   const [energyOpen, setEnergyOpen] = useState(false);
   const [energySmoothingSeconds, setEnergySmoothingSeconds] = useState(3);
-
-  // Simulazione dinamica (F3.16, "modalità alternativa" all'equilibrio per sezione) —
-  // integra la velocità nel tempo invece di risolvere un equilibrio stazionario per
-  // sezione, sullo STESSO piano attuale (stessi breakpoint/potenza). Sperimentale: non
-  // sostituisce nulla, è solo un confronto diagnostico per capire quanto "costa" l'inerzia
-  // sul piano corrente. Gated su pannello aperto: la simulazione secondo-per-secondo di un
-  // percorso lungo non è gratuita, non ha senso calcolarla se non richiesta.
-  const [dynamicOpen, setDynamicOpen] = useState(false);
 
   useEffect(() => {
     void store.routes.listByAthlete(null).then(setRoutes);
@@ -187,38 +195,20 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
 
   const defaultPowerWatts = plan?.defaultPowerWatts ?? 250;
 
-  // Simulazione dinamica (F3.16, "modalità alternativa" all'equilibrio per sezione) —
-  // integra la velocità nel tempo invece di risolvere un equilibrio stazionario per
-  // sezione, sullo STESSO piano attuale (stessi breakpoint/potenza). Sperimentale: non
-  // sostituisce nulla, è solo un confronto diagnostico per capire quanto "costa" l'inerzia
-  // sul piano corrente. Gated su pannello aperto: la simulazione secondo-per-secondo di un
-  // percorso lungo non è gratuita, non ha senso calcolarla se non richiesta.
-  const dynamicComparison = useMemo(() => {
-    if (!dynamicOpen || !plan || !routePoints || routePoints.length < 2) return null;
-    return computeDynamicVsClassicComparison(
-      plan.breakpoints,
-      routePoints,
-      physicsParams,
-      plan.calcMode,
-      defaultPowerWatts,
-      plan.windZones,
-      parseClockTimeToMinutes(plan.plannedStartTime)
-    );
-  }, [dynamicOpen, plan, routePoints, physicsParams, defaultPowerWatts]);
-
-
   // Sezioni del PIANO (non del confronto) — servono a ElevationChart/StatsRow, esattamente
-  // come nella tab "Percorso".
+  // come nella tab "Percorso": SEMPRE dal motore dinamico (D43, un solo motore in tutta
+  // l'app, nessun toggle).
   const sections = useMemo(() => {
     if (!plan || !routePoints || routePoints.length < 2) return [];
-    return computeSections(
+    return computeDynamicSections(
       plan.breakpoints,
       routePoints,
       physicsParams,
       plan.calcMode,
       defaultPowerWatts,
       plan.windZones,
-      parseClockTimeToMinutes(plan.plannedStartTime)
+      parseClockTimeToMinutes(plan.plannedStartTime),
+      plan.smoothingWindowMeters
     );
   }, [plan, routePoints, physicsParams, defaultPowerWatts]);
 
@@ -310,7 +300,8 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
       plan.windZones,
       plan.plannedStartTime,
       display.points,
-      cdaBuilt.samples
+      cdaBuilt.samples,
+      plan.smoothingWindowMeters
     );
   }, [plan, routePoints, physicsParams, display, cdaBuilt]);
 
@@ -353,7 +344,9 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
       plan.defaultPowerWatts,
       plan.windZones,
       display.distanceKm,
-      cdaBuilt.samples
+      cdaBuilt.samples,
+      undefined,
+      plan.smoothingWindowMeters
     );
   }, [plan, routePoints, physicsParams, display, cdaBuilt]);
 
@@ -397,7 +390,7 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
   const displaySpeedSeries = sectionsVerifyMode ? verifiedSpeedSeries : plannedSpeedSeries;
 
   // Griglia a microsezioni: stessa funzione, stesso passo dell'ottimizzatore di pacing
-  // (plan.pacingStepMeters) — calcolata solo quando il pannello è aperto (nessun costo se
+  // (plan.smoothingWindowMeters) — calcolata solo quando il pannello è aperto (nessun costo se
   // non richiesta).
   const microGrid = useMemo(() => {
     if (!microOpen || !plan || !routePoints || !display || !cdaBuilt) return [];
@@ -410,7 +403,8 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
       plan.windZones,
       display.distanceKm,
       cdaBuilt.samples,
-      microStepKm
+      microStepKm,
+      plan.smoothingWindowMeters
     );
   }, [microOpen, plan, routePoints, physicsParams, display, cdaBuilt, microStepKm]);
 
@@ -430,9 +424,9 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
   // non possono diventare breakpoint), quindi è un semplice TOGGLE di visualizzazione, non
   // un'azione distruttiva. Filtra ai soli bin con un campione di potenza reale (altrove non
   // c'è nulla da "verificare"); `verifiedSpeedKmh` è già calcolato dalla libreria con la
-  // STESSA fisica (pendenza, vento, CdA) della velocità pianificata, sostituendo solo la
-  // potenza in ingresso con quella reale di quel bin.
-  const [microVerifyMode, setMicroVerifyMode] = useState<'planned' | 'verified' | 'verifiedDynamic'>('planned');
+  // STESSA fisica (pendenza, vento, CdA, motore dinamico) della velocità pianificata,
+  // sostituendo solo la potenza in ingresso con quella reale di quel bin.
+  const [microVerifyMode, setMicroVerifyMode] = useState<'planned' | 'verified'>('planned');
   const microVerifiedPowerSeries = useMemo(
     () =>
       padSeriesToRouteEdges(
@@ -449,20 +443,8 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
       ),
     [microGrid, display]
   );
-  // Stessa identica potenza reale di microVerifiedSpeedSeries — cambia solo il MODELLO che la
-  // trasforma in velocità (dinamico, F3.16/F3.17, invece di equilibrio stazionario). Copia
-  // esatta del pattern sopra, non una nuova astrazione: stesso filtro, stesso padding.
-  const microVerifiedDynamicSpeedSeries = useMemo(
-    () =>
-      padSeriesToRouteEdges(
-        microGrid.filter(p => p.dynamicVerifiedSpeedKmh != null).map(p => ({ distKm: p.distKm, speedKmh: p.dynamicVerifiedSpeedKmh! })),
-        display?.distanceKm ?? 0
-      ),
-    [microGrid, display]
-  );
   const microDisplayPowerSeries = microVerifyMode === 'planned' ? microPlannedPowerSeries : microVerifiedPowerSeries;
-  const microDisplaySpeedSeries =
-    microVerifyMode === 'verifiedDynamic' ? microVerifiedDynamicSpeedSeries : microVerifyMode === 'verified' ? microVerifiedSpeedSeries : microPlannedSpeedSeries;
+  const microDisplaySpeedSeries = microVerifyMode === 'verified' ? microVerifiedSpeedSeries : microPlannedSpeedSeries;
   const microSectionsWithRealPower = useMemo(() => microGrid.filter(p => p.actualPowerWatts != null).length, [microGrid]);
   // Bin segnalati come "probabile frenata" (F3.13): non un errore di modello, il rider sta
   // decelerando volontariamente (curve, fondo tecnico) — vedi isLikelyBraking in planVsActual.ts
@@ -492,17 +474,15 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
   const microDisplayGrid = useMemo(() => {
     return microGrid.map(p => {
       const hasVerified = microVerifyMode === 'verified' && p.actualPowerWatts != null && p.verifiedSpeedKmh != null;
-      const hasVerifiedDynamic = microVerifyMode === 'verifiedDynamic' && p.actualPowerWatts != null && p.dynamicVerifiedSpeedKmh != null;
-      const plannedSpeedKmh = hasVerifiedDynamic ? p.dynamicVerifiedSpeedKmh! : hasVerified ? p.verifiedSpeedKmh! : p.plannedSpeedKmh;
-      const plannedPowerWatts = hasVerified || hasVerifiedDynamic ? p.actualPowerWatts! : p.plannedPowerWatts;
-      return { ...p, plannedSpeedKmh, plannedPowerWatts, isVerified: hasVerified || hasVerifiedDynamic };
+      const plannedSpeedKmh = hasVerified ? p.verifiedSpeedKmh! : p.plannedSpeedKmh;
+      const plannedPowerWatts = hasVerified ? p.actualPowerWatts! : p.plannedPowerWatts;
+      return { ...p, plannedSpeedKmh, plannedPowerWatts, isVerified: hasVerified };
     });
   }, [microGrid, microVerifyMode]);
   // Etichetta condivisa da grafico/tabella per la modalità corrente — un solo posto dove
   // decidere il testo, invece di ripetere lo stesso ternario in 5 punti diversi della JSX.
-  const microModeLabel = microVerifyMode === 'verifiedDynamic' ? 'Verif. (dinamica)' : microVerifyMode === 'verified' ? 'Verif.' : 'Pian.';
-  const microModeChartLabel =
-    microVerifyMode === 'verifiedDynamic' ? 'verificata dinamica (potenza reale)' : microVerifyMode === 'verified' ? 'verificata (potenza reale)' : 'pianificata';
+  const microModeLabel = microVerifyMode === 'verified' ? 'Verif.' : 'Pian.';
+  const microModeChartLabel = microVerifyMode === 'verified' ? 'verificata (potenza reale)' : 'pianificata';
 
   // Riepilogo compatto per le microsezioni — stesso identico layout/calcolo del riepilogo
   // "Confronto per sezione" sopra (media pesata sul tempo, non aritmetica sulle sezioni):
@@ -689,8 +669,13 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
               totalDistanceKm={selectedRoute.distanceKm}
               windZones={plan.windZones}
               onApplyPowers={updates => void applyPowerUpdates(updates)}
-              stepMeters={plan.pacingStepMeters}
-              onStepMetersChange={v => void setPacingStepMeters(v)}
+              smoothingWindowMeters={plan.smoothingWindowMeters}
+              onSmoothingWindowMetersChange={v => void setSmoothingWindowMeters(v)}
+              plannedStartMinuteOfDay={parseClockTimeToMinutes(plan.plannedStartTime)}
+              criticalPowerW={criticalPowerW}
+              onCriticalPowerWChange={onCriticalPowerWChange}
+              wPrimeJ={wPrimeJ}
+              onWPrimeJChange={onWPrimeJChange}
             />
           </CollapsibleSection>
 
@@ -873,6 +858,7 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
                     plannedPowerLabel={sectionsVerifyMode ? 'verificata (potenza reale)' : 'pianificata'}
                     plannedSpeedLabel={sectionsVerifyMode ? 'verificata (potenza reale)' : 'pianificata'}
                     microBoundariesKm={NO_MICRO_BOUNDARIES}
+                    fatigue={fatigue}
                   />
                 </div>
               </div>
@@ -993,27 +979,13 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
                     Passo: {microStepKm < 1 ? `${Math.round(microStepKm * 1000)} m` : `${microStepKm} km`} (dall'ottimizzatore di pacing, sezione sopra) · {microGrid.length} microsezioni
                   </span>
                   {microSectionsWithRealPower > 0 && (
-                    <label className="stream-toggle" style={{ marginLeft: '1rem' }} title="Mostra, al posto della linea pianificata, la velocità che il modello predice usando la potenza REALE registrata in ogni microsezione — per vedere dove il modello fisico sovrastima/sottostima, isolato dalla scelta di pacing.">
+                    <label className="stream-toggle" style={{ marginLeft: '1rem' }} title="Mostra, al posto della linea pianificata, la velocità che il motore dinamico predice usando la potenza REALE registrata in ogni microsezione — per vedere dove il modello fisico sovrastima/sottostima, isolato dalla scelta di pacing.">
                       <input
                         type="checkbox"
                         checked={microVerifyMode === 'verified'}
                         onChange={e => setMicroVerifyMode(e.target.checked ? 'verified' : 'planned')}
                       />
                       🔍 Verifica dati ({microSectionsWithRealPower} microsezioni con potenza reale)
-                    </label>
-                  )}
-                  {microSectionsWithRealPower > 0 && (
-                    <label
-                      className="stream-toggle"
-                      style={{ marginLeft: '1rem' }}
-                      title="Come 'Verifica dati', STESSA potenza reale in ingresso — ma calcolata dal motore dinamico (integrazione nel tempo, con inerzia) invece che dall'equilibrio stazionario. Confronta i due per vedere dove l'inerzia conta davvero."
-                    >
-                      <input
-                        type="checkbox"
-                        checked={microVerifyMode === 'verifiedDynamic'}
-                        onChange={e => setMicroVerifyMode(e.target.checked ? 'verifiedDynamic' : 'planned')}
-                      />
-                      🔄 Verifica dati (dinamica)
                     </label>
                   )}
                   {microBrakingCount > 0 && (
@@ -1087,6 +1059,7 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
                       plannedPowerLabel={microModeChartLabel}
                       plannedSpeedLabel={microModeChartLabel}
                       microBoundariesKm={microBoundariesKm}
+                      fatigue={fatigue}
                     />
                   </div>
                 </div>
@@ -1186,42 +1159,6 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange }: PlanV
                   ⬇️ Esporta CSV
                 </button>
               </div>
-            </div>
-          </CollapsibleSection>
-
-          <CollapsibleSection
-            title="🔄 Simulazione dinamica (modalità alternativa, sperimentale)"
-            defaultOpen={false}
-            open={dynamicOpen}
-            onToggle={setDynamicOpen}
-            collapsedHint="Confronta il tempo totale del piano attuale calcolato nei due modi: equilibrio per sezione (il modello di sempre) contro integrazione della velocità nel tempo, con inerzia — partenza da fermo compresa. Non sostituisce nulla, è solo un confronto diagnostico."
-          >
-            <div className="physics-panel">
-              <p className="wind-panel-hint">
-                Stesso piano (stessi tratti, stessa potenza target per tratto), calcolato in due modi: il modello classico risolve un equilibrio di
-                velocità per ciascun tratto; la simulazione dinamica integra la velocità secondo per secondo, partendo da fermo, lasciando che
-                l'inerzia e i cambi di pendenza reali (non la media del tratto) influenzino il risultato. La differenza fra i due è quanto
-                "costa" in tempo l'inerzia su QUESTO piano specifico — non è ancora usata per scegliere la potenza (l'ottimizzatore di pacing
-                resta quello classico), solo per vedere l'effetto a piano già fatto.
-              </p>
-              {dynamicComparison ? (
-                <div className="pva-summary-grid">
-                  <div className="pva-summary-item">
-                    <span className="pva-summary-label">Tempo previsto (equilibrio classico)</span>
-                    <span className="pva-summary-val">{formatTime(dynamicComparison.classicTotalHours)}</span>
-                  </div>
-                  <div className="pva-summary-item">
-                    <span className="pva-summary-label">Tempo previsto (simulazione dinamica)</span>
-                    <span className="pva-summary-val">{formatTime(dynamicComparison.dynamicTotalHours)}</span>
-                  </div>
-                  <div className="pva-summary-item">
-                    <span className="pva-summary-label">Differenza (costo dell'inerzia sul piano)</span>
-                    {deltaTimeBadge(dynamicComparison.dynamicTotalHours - dynamicComparison.classicTotalHours)}
-                  </div>
-                </div>
-              ) : (
-                <p className="wind-panel-hint">Carica un piano con percorso per calcolare il confronto.</p>
-              )}
             </div>
           </CollapsibleSection>
         </>
