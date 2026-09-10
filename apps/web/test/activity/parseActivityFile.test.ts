@@ -102,6 +102,11 @@ describe('parseActivityText — TCX', () => {
     expect(result.points[2]!.timeSec).toBeCloseTo(20, 3);
   });
 
+  it('espone startTimeIso come istante assoluto del primo punto (D55)', () => {
+    const result = parseActivityText(SAMPLE_TCX);
+    expect(result.startTimeIso).toBe('2026-06-01T08:00:00.000Z');
+  });
+
   it('gestisce un trackpoint senza potenza (powerW null)', () => {
     const result = parseActivityText(SAMPLE_TCX);
     expect(result.points[2]!.powerW).toBeNull();

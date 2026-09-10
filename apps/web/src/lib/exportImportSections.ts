@@ -20,8 +20,9 @@ export interface SectionsExportPayload {
   }>;
   /** Campo aggiunto dopo il formato originale; assente nei file esportati prima. */
   plannedStartTime?: string | null;
-  /** Campo aggiunto dopo il formato originale; assente nei file esportati prima. */
-  pacingStepMeters?: number;
+  /** Campo aggiunto dopo il formato originale; sostituisce il vecchio `pacingStepMeters`
+   * (era 50-5000m, granularità dell'ottimizzatore classico ora rimosso). */
+  smoothingWindowMeters?: number;
 }
 
 /** Stesso formato del prototipo originale (chiavi `speed`/`power`, non `speedKmh`/`powerWatts`). */
@@ -49,7 +50,7 @@ export function buildSectionsExportPayload(routeName: string, routeDistanceKm: n
       timeSamples: z.timeSamples.map(t => ({ minuteOfDay: t.minuteOfDay, speedKmh: t.speedKmh, directionDeg: t.directionDeg }))
     })),
     plannedStartTime: plan.plannedStartTime,
-    pacingStepMeters: plan.pacingStepMeters
+    smoothingWindowMeters: plan.smoothingWindowMeters
   };
 }
 
@@ -63,8 +64,8 @@ export interface ParsedSectionsImport {
   windZones: WindZoneBoundary[] | null;
   /** null = il file non conteneva un'ora di partenza (non tocca quella esistente). */
   plannedStartTime: string | null;
-  /** null = il file non conteneva un passo pacing (non tocca quello esistente). */
-  pacingStepMeters: number | null;
+  /** null = il file non conteneva una finestra di smoothing (non tocca quella esistente). */
+  smoothingWindowMeters: number | null;
 }
 
 function parseTimeSamplesImport(raw: unknown): WindTimeSample[] {
@@ -189,7 +190,9 @@ export function parseSectionsImport(jsonText: string, currentDistanceKm: number,
     routeDistanceKm: typeof p.routeDistanceKm === 'number' ? p.routeDistanceKm : null,
     windZones: parseWindZonesImport(p.windZones, currentDistanceKm),
     plannedStartTime: typeof p.plannedStartTime === 'string' ? p.plannedStartTime : null,
-    pacingStepMeters:
-      typeof p.pacingStepMeters === 'number' && Number.isFinite(p.pacingStepMeters) && p.pacingStepMeters >= 50 ? p.pacingStepMeters : null
+    smoothingWindowMeters:
+      typeof p.smoothingWindowMeters === 'number' && Number.isFinite(p.smoothingWindowMeters) && p.smoothingWindowMeters >= 0 && p.smoothingWindowMeters <= 100
+        ? Math.round(p.smoothingWindowMeters / 10) * 10
+        : null
   };
 }

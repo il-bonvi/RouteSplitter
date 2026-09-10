@@ -1,6 +1,7 @@
 import { RouteSplitterDB } from './db.js';
 import { createAthleteRepository } from './repositories/athleteRepository.js';
 import { createBikeRepository } from './repositories/bikeRepository.js';
+import { createTireRepository } from './repositories/tireRepository.js';
 import { createRouteRepository } from './repositories/routeRepository.js';
 import { createSectionPlanRepository } from './repositories/sectionPlanRepository.js';
 import { createPowerPlanRepository } from './repositories/powerPlanRepository.js';
@@ -19,10 +20,11 @@ export function createIndexedDbDataStore(databaseName = 'routesplitter'): DataSt
   return {
     athletes: createAthleteRepository(db.athletes),
     bikes: createBikeRepository(db.bikes),
+    tires: createTireRepository(db.tires),
     routes: createRouteRepository(db.routes, db.routePoints),
     sectionPlans: createSectionPlanRepository(db.sectionPlans),
     powerPlans: createPowerPlanRepository(db.powerPlans),
-    activities: createActivityRepository(db.activities)
+    activities: createActivityRepository(db.activities, db.activityPoints)
   };
 }
 

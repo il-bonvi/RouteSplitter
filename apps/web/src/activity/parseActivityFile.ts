@@ -32,6 +32,11 @@ export interface ParsedActivity {
   hasPower: boolean;
   /** blocchi trovati ma scartati (coordinate/tempo mancanti o non validi). */
   discardedCount: number;
+  /** Istante assoluto (ISO 8601) del primo punto valido — `timeSec` sopra è relativo a
+   * questo. Serve per datare correttamente un'attività salvata (D55): senza questo, "quando"
+   * è successa un'uscita si saprebbe solo dalla data di caricamento del file, non da quella
+   * reale della registrazione. */
+  startTimeIso: string;
 }
 
 interface RawCandidate {
@@ -132,7 +137,7 @@ function finalize(candidates: RawCandidate[], format: 'tcx' | 'gpx', discardedCo
   }));
   const hasPower = points.some(p => p.powerW != null && p.powerW > 0);
 
-  return { points, format, hasPower, discardedCount };
+  return { points, format, hasPower, discardedCount, startTimeIso: new Date(t0).toISOString() };
 }
 
 /** Autodetect TCX vs GPX dal contenuto (non dal nome file, spesso inaffidabile). */

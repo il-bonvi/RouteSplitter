@@ -14,7 +14,7 @@ const plan: SectionPlan = {
   defaultPowerWatts: 250,
   windZones: [],
   plannedStartTime: null,
-  pacingStepMeters: 250,
+  smoothingWindowMeters: 50,
   breakpoints: [
     { id: 'start', distKm: 0, fixed: 'start', sectionLabel: null, speedKmh: null, powerWatts: null },
     { id: 'mid', distKm: 10, fixed: false, sectionLabel: 'S1', speedKmh: 35, powerWatts: null },
@@ -42,10 +42,10 @@ describe('parseSectionsImport', () => {
     expect(parsed.breakpoints[2]!.distKm).toBe(20);
     expect(parsed.breakpoints[1]!.speedKmh).toBe(35);
     expect(parsed.calcMode).toBe('speed');
-    expect(parsed.pacingStepMeters).toBe(250);
+    expect(parsed.smoothingWindowMeters).toBe(50);
   });
 
-  it('un file senza pacingStepMeters non tocca il passo esistente (torna null)', () => {
+  it('un file senza smoothingWindowMeters non tocca il valore esistente (torna null)', () => {
     const legacyPayload = {
       type: 'routesplitter-sections',
       points: [
@@ -54,13 +54,16 @@ describe('parseSectionsImport', () => {
       ]
     };
     const parsed = parseSectionsImport(JSON.stringify(legacyPayload), 20, 40);
-    expect(parsed.pacingStepMeters).toBeNull();
+    expect(parsed.smoothingWindowMeters).toBeNull();
   });
 
-  it('rifiuta un pacingStepMeters sotto la soglia minima (50m), tornando null', () => {
-    const payload = { ...buildSectionsExportPayload('Test', 20, plan), pacingStepMeters: 10 };
-    const parsed = parseSectionsImport(JSON.stringify(payload), 20, 40);
-    expect(parsed.pacingStepMeters).toBeNull();
+  it('rifiuta uno smoothingWindowMeters fuori dal range 0-100, tornando null (un valore interno non multiplo di 10 viene invece arrotondato)', () => {
+    const tooHigh = { ...buildSectionsExportPayload('Test', 20, plan), smoothingWindowMeters: 250 };
+    expect(parseSectionsImport(JSON.stringify(tooHigh), 20, 40).smoothingWindowMeters).toBeNull();
+    const negative = { ...buildSectionsExportPayload('Test', 20, plan), smoothingWindowMeters: -10 };
+    expect(parseSectionsImport(JSON.stringify(negative), 20, 40).smoothingWindowMeters).toBeNull();
+    const notMultipleOf10 = { ...buildSectionsExportPayload('Test', 20, plan), smoothingWindowMeters: 33 };
+    expect(parseSectionsImport(JSON.stringify(notMultipleOf10), 20, 40).smoothingWindowMeters).toBe(30);
   });
 
   it('aggiunge start/finish mancanti invece di fallire', () => {

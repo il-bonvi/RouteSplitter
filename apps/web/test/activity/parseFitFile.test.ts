@@ -56,6 +56,15 @@ describe('parseFitFile', () => {
     expect(result.points[2]!.timeSec).toBeCloseTo(20, 3);
   });
 
+  it('espone startTimeIso come istante assoluto del primo record (D55)', async () => {
+    const file = buildFitFile([
+      { lat: 45.1, lon: 11.1, ele: 200, power: 210, distM: 0, t: new Date('2026-06-01T08:00:00Z') },
+      { lat: 45.1009, lon: 11.1, ele: 205, power: 230, distM: 100, t: new Date('2026-06-01T08:00:10Z') }
+    ]);
+    const result = await parseFitFile(file);
+    expect(result.startTimeIso).toBe('2026-06-01T08:00:00.000Z');
+  });
+
   it("lancia un errore chiaro per un file che non è un FIT", async () => {
     const file = new File([new Uint8Array([1, 2, 3, 4, 5])], 'not.fit');
     await expect(parseFitFile(file)).rejects.toThrow(/non sembra un FIT/i);
