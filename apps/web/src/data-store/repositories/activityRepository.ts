@@ -1,34 +1,63 @@
 import type { Table } from 'dexie';
-import { ActivitySchema, CURRENT_SCHEMA_VERSION, type Activity, type Id } from '@shared-schema';
+import {
+  ActivitySchema,
+  ActivityPointsPayloadSchema,
+  CURRENT_SCHEMA_VERSION,
+  type Activity,
+  type ActivityPointsPayload,
+  type ActivityTrackPointRecord,
+  type Id
+} from '@shared-schema';
 import { generateId, nowIso } from '../common.js';
 import type { ActivityRepository } from '../types.js';
 
-export function createActivityRepository(table: Table<Activity, string>): ActivityRepository {
+export function createActivityRepository(
+  activitiesTable: Table<Activity, string>,
+  pointsTable: Table<ActivityPointsPayload, string>
+): ActivityRepository {
   return {
-    async create(input) {
+    async create(input, points: ActivityTrackPointRecord[]) {
       const now = nowIso();
-      const entity = ActivitySchema.parse({
+      const id = generateId();
+      const activity = ActivitySchema.parse({
         ...input,
-        id: generateId(),
+        id,
         schemaVersion: CURRENT_SCHEMA_VERSION,
         createdAt: now,
         updatedAt: now
       });
-      await table.add(entity);
-      return entity;
+      const payload = ActivityPointsPayloadSchema.parse({
+        activityId: id,
+        schemaVersion: CURRENT_SCHEMA_VERSION,
+        points
+      });
+      // Stessa cautela di routeRepository.create: le due scritture devono restare coerenti,
+      // mai un'attività orfana senza punti o viceversa.
+      await activitiesTable.db.transaction('rw', activitiesTable, pointsTable, async () => {
+        await activitiesTable.add(activity);
+        await pointsTable.add(payload);
+      });
+      return activity;
     },
     async get(id: Id) {
-      const found = await table.get(id);
+      const found = await activitiesTable.get(id);
       return found ?? null;
     },
+    async getPoints(id: Id) {
+      const payload = await pointsTable.get(id);
+      return payload ? payload.points : null;
+    },
     async listByAthlete(athleteId: Id) {
-      return table.where('athleteId').equals(athleteId).toArray();
+      return activitiesTable.where('athleteId').equals(athleteId).toArray();
     },
     async listByRoute(routeId: Id) {
-      return table.where('routeId').equals(routeId).toArray();
+      return activitiesTable.where('routeId').equals(routeId).toArray();
     },
     async delete(id: Id) {
-      await table.delete(id);
+      await activitiesTable.db.transaction('rw', activitiesTable, pointsTable, async () => {
+        await activitiesTable.delete(id);
+        await pointsTable.delete(id);
+      });
     }
   };
 }

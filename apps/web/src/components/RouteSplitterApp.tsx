@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { processRoute, computeDynamicSections, parseClockTimeToMinutes, type ProcessedPoint } from '@physics-core';
-import { DEFAULT_PHYSICS_PARAMS, type Route, type RawTrackPoint, type PhysicsParams } from '@shared-schema';
+import { DEFAULT_PHYSICS_PARAMS, type Route, type RawTrackPoint, type PhysicsParams, type Tire, type Activity, type CreateActivityInput } from '@shared-schema';
 import { useDataStore } from '../lib/DataStoreContext.js';
+import type { ActivityTrackPoint } from '../activity/parseActivityFile.js';
 import { useSectionPlan } from '../hooks/useSectionPlan.js';
 import { parseGpxText } from '../gpx/parseGpx.js';
 import { downloadTextFile } from '../lib/exportCsv.js';
@@ -39,10 +40,102 @@ export function RouteSplitterApp() {
   // (che modella solo l'equilibrio aerodinamico/di massa). Sollevato qui (come physicsParams,
   // stesso pattern) perché serve sia al pannello ottimizzatore (Tab 1 e Tab 3) sia al grafico
   // di confronto in Tab 3 (`ActivityElevationChart`) — nessuno dei due basta da solo come
-  // "proprietario" di questo stato. Non persistito, come physicsParams: si azzera al reload,
-  // comportamento esistente per questo genere di parametri, non una scelta nuova di questo fix.
+  // "proprietario" di questo stato. Dal caricamento (D53) inizializzati dal profilo atleta
+  // salvato su IndexedDB, se presente; il salvataggio è esplicito ("Salva profilo" in Tab 2),
+  // NON automatico ad ogni modifica — un valore digitato per una prova non deve sovrascrivere
+  // silenziosamente il profilo persistito finché l'atleta non conferma.
   const [criticalPowerW, setCriticalPowerW] = useState<number | ''>('');
   const [wPrimeJ, setWPrimeJ] = useState<number | ''>('');
+  // Id dell'unico Athlete locale per dispositivo (v1, nessun login — vedi stato_rs.md D5).
+  // null finché non è mai stato salvato nulla; creato implicitamente (`ensureAthleteId`) al
+  // primo salvataggio di profilo o al primo pneumatico aggiunto, mai a scatola vuota all'avvio.
+  const [athleteId, setAthleteId] = useState<string | null>(null);
+  const [tires, setTires] = useState<Tire[]>([]);
+  const [savedActivities, setSavedActivities] = useState<Activity[]>([]);
+
+  // Carica il profilo persistito (se esiste) all'avvio dell'app, non al primo accesso alla
+  // Tab 2 — altrimenti Tab 1/3 partirebbero con CP/W'/peso vuoti finché l'atleta non visita
+  // la Tab 2 almeno una volta in quella sessione (D53).
+  useEffect(() => {
+    void (async () => {
+      const list = await store.athletes.list();
+      const athlete = list[0];
+      if (!athlete) return;
+      setAthleteId(athlete.id);
+      if (athlete.weightKg != null) {
+        setPhysicsParams(p => ({ ...p, riderMassKg: athlete.weightKg! }));
+      }
+      if (athlete.criticalPowerW != null) setCriticalPowerW(athlete.criticalPowerW);
+      if (athlete.wPrimeJ != null) setWPrimeJ(athlete.wPrimeJ);
+      const tireList = await store.tires.listByAthlete(athlete.id);
+      setTires(tireList);
+      const activityList = await store.activities.listByAthlete(athlete.id);
+      setSavedActivities(activityList);
+    })();
+  }, [store]);
+
+  const ensureAthleteId = useCallback(async (): Promise<string> => {
+    if (athleteId) return athleteId;
+    const created = await store.athletes.create({ coachId: null, name: 'Profilo principale' });
+    setAthleteId(created.id);
+    return created.id;
+  }, [athleteId, store]);
+
+  const saveAthleteProfile = useCallback(
+    async (patch: { weightKg?: number; criticalPowerW?: number; wPrimeJ?: number }) => {
+      const id = await ensureAthleteId();
+      await store.athletes.update(id, patch);
+    },
+    [ensureAthleteId, store]
+  );
+
+  const addTire = useCallback(
+    async (name: string, crr: number) => {
+      const id = await ensureAthleteId();
+      const created = await store.tires.create({ athleteId: id, name, crr });
+      setTires(t => [...t, created]);
+    },
+    [ensureAthleteId, store]
+  );
+
+  const deleteTire = useCallback(
+    async (tireId: string) => {
+      await store.tires.delete(tireId);
+      setTires(t => t.filter(x => x.id !== tireId));
+    },
+    [store]
+  );
+
+  // Storico uscite salvate (D55, Tab 2) — stesso pattern di ensureAthleteId sopra: l'atleta
+  // locale si crea implicitamente al primo salvataggio reale, mai a scatola vuota.
+  const saveActivity = useCallback(
+    async (input: Omit<CreateActivityInput, 'athleteId'>, points: ActivityTrackPoint[]) => {
+      const id = await ensureAthleteId();
+      const created = await store.activities.create({ ...input, athleteId: id }, points);
+      setSavedActivities(list => [created, ...list]);
+      return created.id;
+    },
+    [ensureAthleteId, store]
+  );
+
+  const loadActivityData = useCallback(
+    async (activityId: string) => {
+      const activity = await store.activities.get(activityId);
+      if (!activity) return null;
+      const points = await store.activities.getPoints(activityId);
+      if (!points) return null;
+      return { activity, points };
+    },
+    [store]
+  );
+
+  const deleteActivity = useCallback(
+    async (activityId: string) => {
+      await store.activities.delete(activityId);
+      setSavedActivities(list => list.filter(a => a.id !== activityId));
+    },
+    [store]
+  );
   // Condivisa fra CdaEstimator (campione singolo) e CdaFromActivityCard (multi-punto da
   // file): stesso target 'base' | indice-soglia, stessa semantica di scrittura su cdaTiers.
   const applyCda = useCallback((cda: number, target: 'base' | number) => {
@@ -280,7 +373,25 @@ export function RouteSplitterApp() {
         </button>
       </div>
 
-      {activeTab === 'activity' && <ActivityAnalysisView physicsParams={physicsParams} onApplyCda={applyCda} />}
+      {activeTab === 'activity' && (
+        <ActivityAnalysisView
+          physicsParams={physicsParams}
+          onPhysicsParamsChange={setPhysicsParams}
+          onApplyCda={applyCda}
+          criticalPowerW={criticalPowerW}
+          onCriticalPowerWChange={setCriticalPowerW}
+          wPrimeJ={wPrimeJ}
+          onWPrimeJChange={setWPrimeJ}
+          tires={tires}
+          onSaveProfile={saveAthleteProfile}
+          onAddTire={addTire}
+          onDeleteTire={deleteTire}
+          savedActivities={savedActivities}
+          onSaveActivity={saveActivity}
+          onLoadActivityData={loadActivityData}
+          onDeleteActivity={deleteActivity}
+        />
+      )}
 
       {activeTab === 'compare' && (
         <PlanVsActualView

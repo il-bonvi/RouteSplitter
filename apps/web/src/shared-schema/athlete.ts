@@ -14,6 +14,11 @@ export const AthleteSchema = EntityBaseSchema.extend({
   name: z.string().min(1).max(120),
   weightKg: z.number().min(30).max(160).optional(),
   ftpWatts: z.number().min(30).max(600).optional(),
+  /** CP/W' (D48): proprietà persistente dell'atleta, indipendente da `physicsDefaults` (che
+   * modella solo l'equilibrio aerodinamico/di massa) — stessa separazione concettuale già
+   * adottata in app (RouteSplitterApp) quando CP/W' erano solo stato React non persistito. */
+  criticalPowerW: z.number().min(50).max(600).optional(),
+  wPrimeJ: z.number().min(1000).max(60000).optional(),
   /** Sovrascrive i default fisici globali per questo atleta (es. CdA/Crr abituali). */
   physicsDefaults: PhysicsParamsOverrideSchema.optional(),
   notes: z.string().max(4000).optional()

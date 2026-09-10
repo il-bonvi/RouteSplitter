@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import {
   estimateCdaFromSamples,
+  estimateWindFromSamples,
   bucketSamplesByTier,
   bucketSamplesByBreakpoints,
   makeUniformWindZones,
@@ -9,10 +10,14 @@ import {
   computeGainLossBetween,
   type PhysicsParams,
   type SectionBreakpoint,
-  type CdaSample
+  type CdaSample,
+  type WindEstimateResult
 } from '@physics-core';
+import type { Tire, Activity, CreateActivityInput } from '@shared-schema';
 import { parseActivityText, type ActivityTrackPoint } from '../activity/parseActivityFile.js';
 import { buildCdaSamples } from '../activity/activitySamples.js';
+import { AthleteProfileCard } from './AthleteProfileCard.js';
+import { RideConditionsPanel } from './RideConditionsPanel.js';
 import { buildActivityDisplay, nearestPointTimeSec } from '../activity/buildActivityDisplay.js';
 import { RouteMap, type MapWindControlData } from './RouteMap.js';
 import { ActivityElevationChart } from './ActivityElevationChart.js';
@@ -21,8 +26,24 @@ import { generateId } from '../data-store/common.js';
 
 interface ActivityAnalysisViewProps {
   physicsParams: PhysicsParams;
+  onPhysicsParamsChange: (params: PhysicsParams) => void;
   /** target 'base' = sovrascrive il CdA base; un numero = indice della soglia in cdaTiers da sovrascrivere. */
   onApplyCda: (cda: number, target: 'base' | number) => void;
+  /** CP/W' (D48), sollevati a livello di app — vedi nota in `RouteSplitterApp.tsx`. */
+  criticalPowerW: number | '';
+  onCriticalPowerWChange: (v: number | '') => void;
+  wPrimeJ: number | '';
+  onWPrimeJChange: (v: number | '') => void;
+  /** Pneumatici salvati (D53) — Crr per pneumatico, non per atleta: scelto ad ogni analisi. */
+  tires: Tire[];
+  onSaveProfile: (patch: { weightKg?: number; criticalPowerW?: number; wPrimeJ?: number }) => Promise<void>;
+  onAddTire: (name: string, crr: number) => Promise<void>;
+  onDeleteTire: (tireId: string) => Promise<void>;
+  /** Storico uscite salvate (D55) — metadati soli, i punti si caricano solo alla riapertura. */
+  savedActivities: Activity[];
+  onSaveActivity: (input: Omit<CreateActivityInput, 'athleteId'>, points: ActivityTrackPoint[]) => Promise<string>;
+  onLoadActivityData: (activityId: string) => Promise<{ activity: Activity; points: ActivityTrackPoint[] } | null>;
+  onDeleteActivity: (activityId: string) => Promise<void>;
 }
 
 interface BucketResult {
@@ -50,6 +71,14 @@ interface ActivitySectionRow {
   cda: number | null;
   cdaStdDev: number | null;
   usedSamples: number;
+  /** Vento IMPLICITO dalla fisica su questo tratto (physics-core `estimateWindFromSamples`,
+   * dato il CdA attuale in `physicsParams`) — indipendente dalla bussola in `avgHeadwindKmh`
+   * sopra: quella è quanto vento HAI IMPOSTATO tu sulla mappa, questo è quanto ne implicano
+   * i dati REGISTRATI. Stessa convenzione di segno (+testa/-coda), confrontabile direttamente
+   * con `avgHeadwindKmh` per giudicare quanto ci hai azzeccato — o, se le due differiscono
+   * anche dove non dovrebbero, un segnale che CdA/Crr non sono ancora tarati bene.
+   */
+  windEstimate: WindEstimateResult | null;
   /** id del breakpoint che chiude questa sezione — null per l'ultima sezione (aperta, non rimovibile). */
   breakpointId: string | null;
 }
@@ -90,12 +119,34 @@ function windBadge(headwindKmh: number) {
  * `effectiveHeadwindKmh` + `routeBearingAtDistKm`, la stessa fisica della fascia vento sul
  * grafico — non un valore scalare fisso applicato uniformemente come prima: due tratti con
  * la stessa intensità di vento ma bearing diverso ora hanno correttamente headwind diverso.
+ * Accanto a questo (quanto vento HAI IMPOSTATO tu), la colonna "Vento (fisica)" mostra quanto
+ * vento IMPLICANO i dati registrati dato il CdA attuale (`estimateWindFromSamples`,
+ * l'inverso della stima CdA — già usata in Tab 3 per "Affidabilità vento", qui esposta anche
+ * qui): le due si confrontano direttamente (stessa convenzione di segno) per giudicare sia
+ * quanto la bussola ci ha azzeccato, sia — se differiscono anche dove non dovrebbero — se
+ * CdA/Crr non sono ancora tarati bene.
  *
  * Sezioni manuali (F3.4): stesso motore di split della pianificazione — un breakpoint
  * cliccato sul grafico O sulla mappa (sincronizzati, come nella tab "Percorso") definisce un
  * confine, `bucketSamplesByBreakpoints` (physics-core) divide i campioni CdA fra i confini.
  */
-export function ActivityAnalysisView({ physicsParams, onApplyCda }: ActivityAnalysisViewProps) {
+export function ActivityAnalysisView({
+  physicsParams,
+  onPhysicsParamsChange,
+  onApplyCda,
+  criticalPowerW,
+  onCriticalPowerWChange,
+  wPrimeJ,
+  onWPrimeJChange,
+  tires,
+  onSaveProfile,
+  onAddTire,
+  onDeleteTire,
+  savedActivities,
+  onSaveActivity,
+  onLoadActivityData,
+  onDeleteActivity
+}: ActivityAnalysisViewProps) {
   const [busy, setBusy] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
@@ -107,6 +158,15 @@ export function ActivityAnalysisView({ physicsParams, onApplyCda }: ActivityAnal
   const [windDirectionDeg, setWindDirectionDeg] = useState(0);
   const [sectionBreakpoints, setSectionBreakpoints] = useState<SectionBreakpoint[]>([]);
   const [addSectionMode, setAddSectionMode] = useState(false);
+  const [activityStartIso, setActivityStartIso] = useState<string | null>(null);
+  // id dell'attività salvata attualmente aperta — null se questo file non è (ancora) mai
+  // stato salvato, oppure è stato caricato da upload invece che dallo storico. Serve solo per
+  // l'etichetta del pulsante ("Salva" vs "Aggiorna") — non c'è "autosave", ogni salvataggio è
+  // un'azione esplicita dell'atleta.
+  const [currentActivityId, setCurrentActivityId] = useState<string | null>(null);
+  const [savingActivity, setSavingActivity] = useState(false);
+  const [saveActivityError, setSaveActivityError] = useState<string | null>(null);
+  const [loadingActivityId, setLoadingActivityId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const addBreakpoint = (distKm: number) => {
@@ -184,6 +244,7 @@ export function ActivityAnalysisView({ physicsParams, onApplyCda }: ActivityAnal
     return buckets.map((bucket, i) => {
       const toKmFinite = Number.isFinite(bucket.toKm) ? bucket.toKm : totalKm;
       const r = estimateCdaFromSamples(bucket.samples, physicsParams);
+      const windEst = estimateWindFromSamples(bucket.samples, physicsParams);
       const { gain, loss } = computeGainLossBetween(display.points, bucket.fromKm, toKmFinite);
       const distanceKm = toKmFinite - bucket.fromKm;
       const avgGradient = distanceKm > 0 ? ((gain - loss) / (distanceKm * 1000)) * 100 : 0;
@@ -210,6 +271,7 @@ export function ActivityAnalysisView({ physicsParams, onApplyCda }: ActivityAnal
         cda: r?.cda ?? null,
         cdaStdDev: r?.stdDev ?? null,
         usedSamples: r?.usedSamples ?? 0,
+        windEstimate: windEst,
         breakpointId: i < sortedBps.length ? sortedBps[i]!.id : null
       };
     });
@@ -221,6 +283,13 @@ export function ActivityAnalysisView({ physicsParams, onApplyCda }: ActivityAnal
     return { min: Math.min(...values), max: Math.max(...values) };
   }, [sectionRows]);
 
+  // Vento stimato dalla fisica sull'INTERA uscita (non sezionato) — un solo numero da
+  // confrontare a colpo d'occhio con la bussola sopra, prima ancora di guardare le sezioni.
+  const overallWindEstimate = useMemo<WindEstimateResult | null>(
+    () => (cdaBuilt ? estimateWindFromSamples(cdaBuilt.samples, physicsParams) : null),
+    [cdaBuilt, physicsParams]
+  );
+
   const handleFile = async (file: File) => {
     setBusy(true);
     setErrorMsg(null);
@@ -228,6 +297,12 @@ export function ActivityAnalysisView({ physicsParams, onApplyCda }: ActivityAnal
     setHasPowerData(false);
     setSectionBreakpoints([]);
     setFileName(file.name);
+    setActivityStartIso(null);
+    // Un file appena caricato da disco è per definizione un'uscita non ancora salvata (o
+    // comunque non necessariamente la stessa già aperta) — nessun collegamento implicito con
+    // un salvataggio precedente finché l'atleta non preme di nuovo "Salva".
+    setCurrentActivityId(null);
+    setSaveActivityError(null);
     try {
       const parsed = /\.fit$/i.test(file.name)
         ? await (await import('../activity/parseFitFile.js')).parseFitFile(file)
@@ -238,11 +313,92 @@ export function ActivityAnalysisView({ physicsParams, onApplyCda }: ActivityAnal
       }
       setActivityPoints(parsed.points);
       setHasPowerData(parsed.hasPower);
+      setActivityStartIso(parsed.startTimeIso);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Errore durante la lettura del file.');
     } finally {
       setBusy(false);
     }
+  };
+
+  const handleSaveActivity = async () => {
+    if (!activityPoints || !display) return;
+    setSavingActivity(true);
+    setSaveActivityError(null);
+    try {
+      // Se questa uscita era già stata salvata, un nuovo "Salva" la SOSTITUISCE (cancella +
+      // ricrea) invece di accumulare un duplicato nello storico ad ogni piccola modifica di
+      // Crr/breakpoint/vento — un semplice "sovrascrivi", non serve un vero update per v1.
+      if (currentActivityId) {
+        await onDeleteActivity(currentActivityId);
+      }
+      const id = await onSaveActivity(
+        {
+          routeId: null,
+          powerPlanId: null,
+          sourceFileName: fileName ?? 'attività senza nome',
+          activityDate: activityStartIso ?? new Date().toISOString(),
+          summary: {
+            durationHours: display.durationSec / 3600,
+            distanceKm: display.distanceKm,
+            avgPowerWatts: display.avgPowerW ?? undefined,
+            elevationGain: display.elevationGain
+          },
+          physicsParamsSnapshot: physicsParams,
+          windSpeedKmh,
+          windDirectionDeg,
+          sectionBreakpointsKm: sectionBreakpoints.map(b => b.distKm)
+        },
+        activityPoints
+      );
+      setCurrentActivityId(id);
+    } catch (err) {
+      setSaveActivityError(err instanceof Error ? err.message : 'Errore durante il salvataggio.');
+    } finally {
+      setSavingActivity(false);
+    }
+  };
+
+  const handleLoadActivity = async (id: string) => {
+    setLoadingActivityId(id);
+    setErrorMsg(null);
+    try {
+      const result = await onLoadActivityData(id);
+      if (!result) {
+        setErrorMsg("Attività non trovata (potrebbe essere stata cancellata da un'altra scheda).");
+        return;
+      }
+      setActivityPoints(result.points);
+      setHasPowerData(result.points.some(p => p.powerW != null && p.powerW > 0));
+      setFileName(result.activity.sourceFileName);
+      setActivityStartIso(result.activity.activityDate);
+      setSectionBreakpoints(
+        result.activity.sectionBreakpointsKm.map(distKm => ({
+          id: generateId(),
+          distKm,
+          fixed: false as const,
+          sectionLabel: null,
+          speedKmh: null,
+          powerWatts: null
+        }))
+      );
+      // Le condizioni usate per QUESTA uscita sostituiscono quelle correnti — è tutto il
+      // punto dello storico (D55): senza questo, riaprire una gara vecchia userebbe Crr/
+      // drivetrain/densità aria di qualunque cosa fosse rimasta impostata prima.
+      onPhysicsParamsChange(result.activity.physicsParamsSnapshot);
+      setWindSpeedKmh(result.activity.windSpeedKmh);
+      setWindDirectionDeg(result.activity.windDirectionDeg);
+      setCurrentActivityId(id);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : "Errore durante il caricamento dell'attività salvata.");
+    } finally {
+      setLoadingActivityId(null);
+    }
+  };
+
+  const handleDeleteActivity = async (id: string) => {
+    await onDeleteActivity(id);
+    if (currentActivityId === id) setCurrentActivityId(null);
   };
 
   const samplesCount = cdaBuilt?.samples.length ?? 0;
@@ -259,6 +415,54 @@ export function ActivityAnalysisView({ physicsParams, onApplyCda }: ActivityAnal
         </p>
       </div>
 
+      <AthleteProfileCard
+        physicsParams={physicsParams}
+        onPhysicsParamsChange={onPhysicsParamsChange}
+        criticalPowerW={criticalPowerW}
+        onCriticalPowerWChange={onCriticalPowerWChange}
+        wPrimeJ={wPrimeJ}
+        onWPrimeJChange={onWPrimeJChange}
+        tires={tires}
+        onSaveProfile={onSaveProfile}
+        onAddTire={onAddTire}
+        onDeleteTire={onDeleteTire}
+      />
+
+      <RideConditionsPanel physicsParams={physicsParams} onPhysicsParamsChange={onPhysicsParamsChange} />
+
+      {savedActivities.length > 0 && (
+        <div className="saved-activities-section">
+          <h3>Uscite salvate</h3>
+          <div className="saved-activities-list">
+            {[...savedActivities]
+              .sort((a, b) => b.activityDate.localeCompare(a.activityDate))
+              .map(a => (
+                <div key={a.id} className={`saved-activity-row${currentActivityId === a.id ? ' saved-activity-row-active' : ''}`}>
+                  <span className="saved-activity-info">
+                    <strong>{a.sourceFileName}</strong>{' '}
+                    <span className="physics-hint">
+                      {new Date(a.activityDate).toLocaleDateString()} — {a.summary.distanceKm.toFixed(1)} km,{' '}
+                      {formatTime(a.summary.durationHours)}
+                      {a.summary.avgPowerWatts != null ? `, ${Math.round(a.summary.avgPowerWatts)} W` : ''}
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    disabled={loadingActivityId === a.id}
+                    onClick={() => void handleLoadActivity(a.id)}
+                  >
+                    {loadingActivityId === a.id ? '…' : currentActivityId === a.id ? '✓ Aperta' : 'Apri'}
+                  </button>
+                  <button type="button" className="btn btn-sm ghost" onClick={() => void handleDeleteActivity(a.id)}>
+                    ✕
+                  </button>
+                </div>
+              ))}
+          </div>
+        </div>
+      )}
+
       <div className="pacing-actions activity-upload-row">
         <button type="button" onClick={() => inputRef.current?.click()} disabled={busy}>
           {busy ? 'Elaborazione…' : fileName ? `📄 ${fileName}` : '📄 Carica FIT/TCX/GPX'}
@@ -274,8 +478,14 @@ export function ActivityAnalysisView({ physicsParams, onApplyCda }: ActivityAnal
             e.target.value = '';
           }}
         />
+        {activityPoints && (
+          <button type="button" className="pacing-full" disabled={savingActivity} onClick={() => void handleSaveActivity()}>
+            {savingActivity ? 'Salvataggio…' : currentActivityId ? '✓ Salvata' : '💾 Salva questa uscita'}
+          </button>
+        )}
       </div>
 
+      {saveActivityError && <p className="app-error activity-upload-row">{saveActivityError}</p>}
       {errorMsg && <p className="app-error activity-upload-row">{errorMsg}</p>}
 
       {display && (
@@ -409,6 +619,14 @@ export function ActivityAnalysisView({ physicsParams, onApplyCda }: ActivityAnal
               )}
 
               <div className="cda-section-view">
+                {overallWindEstimate && (
+                  <p className="physics-hint">
+                    Vento stimato dalla fisica sull'intera uscita (dato il CdA attuale):{' '}
+                    <strong>{windBadge(overallWindEstimate.windKmh)}</strong>{' '}
+                    (±{overallWindEstimate.stdDev.toFixed(1)} km/h, n={overallWindEstimate.usedSamples}) — confronta
+                    con la bussola impostata sopra.
+                  </p>
+                )}
                 {sectionRows.length === 0 ? (
                   <p className="physics-hint">
                     Nessuna sezione ancora definita — aggiungine una dal grafico o dalla mappa con "✛ Aggiungi punto".
@@ -438,6 +656,7 @@ export function ActivityAnalysisView({ physicsParams, onApplyCda }: ActivityAnal
                             <th>D−</th>
                             <th>Pend.</th>
                             <th>Vento</th>
+                            <th>Vento (fisica)</th>
                             <th>Velocità media</th>
                             <th>Potenza media</th>
                             <th>Tempo</th>
@@ -463,6 +682,13 @@ export function ActivityAnalysisView({ physicsParams, onApplyCda }: ActivityAnal
                                   {row.avgGradient.toFixed(1)}%
                                 </td>
                                 <td className="mono wind-cell">{windBadge(row.avgHeadwindKmh)}</td>
+                                <td className="mono wind-cell">
+                                  {row.windEstimate ? (
+                                    windBadge(row.windEstimate.windKmh)
+                                  ) : (
+                                    <span className="physics-hint">n. d.</span>
+                                  )}
+                                </td>
                                 <td className="mono">{row.avgSpeedKmh.toFixed(1)} km/h</td>
                                 <td className="mono">{row.avgPowerW != null ? `${Math.round(row.avgPowerW)} W` : '—'}</td>
                                 <td className="mono time">{formatTime(row.durationSec / 3600)}</td>

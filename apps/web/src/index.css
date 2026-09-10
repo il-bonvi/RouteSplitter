@@ -573,6 +573,122 @@ body {
   gap: 8px;
   margin-top: 12px;
 }
+.athlete-profile-card {
+  margin: 0;
+  width: 100%;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.athlete-profile-card h3 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+.athlete-profile-card h4 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+.athlete-profile-fields {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.athlete-profile-save-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.athlete-tires-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.tires-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.tire-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 10px;
+  background: var(--surface2);
+  border-radius: 10px;
+  font-size: 0.85rem;
+}
+.tire-row-active {
+  border: 1px solid color-mix(in srgb, var(--accent, #34d399) 60%, transparent);
+}
+.tire-add-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.ride-conditions-panel {
+  margin: 0;
+  width: 100%;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.ride-conditions-panel h3 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+.ride-conditions-fields {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.saved-activities-section {
+  margin: 0;
+  width: 100%;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.saved-activities-section h3 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+.saved-activities-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.saved-activity-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--surface2);
+  border-radius: 10px;
+  font-size: 0.85rem;
+}
+.saved-activity-row-active {
+  border: 1px solid color-mix(in srgb, var(--accent, #34d399) 60%, transparent);
+}
+.saved-activity-info {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .cda-activity-result-row {
   display: flex;
   align-items: center;

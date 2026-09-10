@@ -91,5 +91,5 @@ export async function parseFitFile(file: File): Promise<ParsedActivity> {
   }));
   const hasPower = points.some(p => p.powerW != null && p.powerW > 0);
 
-  return { points, format: 'fit', hasPower, discardedCount };
+  return { points, format: 'fit', hasPower, discardedCount, startTimeIso: new Date(t0).toISOString() };
 }
