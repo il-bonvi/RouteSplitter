@@ -689,6 +689,38 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.weather-panel {
+  margin: 0;
+  width: 100%;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.weather-panel-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+.weather-panel-results {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.weather-panel-result-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 6px 10px;
+  background: var(--surface2);
+  border-radius: 10px;
+  font-size: 0.85rem;
+}
 .cda-activity-result-row {
   display: flex;
   align-items: center;
@@ -1387,6 +1419,65 @@ body {
   gap: 8px;
   flex-wrap: wrap;
 }
+.wind-zones-layout {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+.wind-zone-compass-block {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.wind-zone-compass-readout {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+.wind-zone-compass-readout input {
+  width: 60px;
+}
+.wind-zones-layout .wind-zones-chips {
+  flex: 1;
+  min-width: 200px;
+}
+.wind-time-editor-title {
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+.wind-time-override-banner {
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--accent, #34d399) 50%, transparent);
+  background: color-mix(in srgb, var(--accent, #34d399) 8%, transparent);
+}
+.pva-headline-summary {
+  border: 1px solid color-mix(in srgb, var(--accent, #34d399) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent, #34d399) 6%, var(--surface));
+}
+.pva-headline-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+.pva-group-divider {
+  margin: 22px 0 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text);
+}
+.pva-group-divider-hint {
+  margin-top: 6px;
+  font-weight: 400;
+  font-size: 0.8rem;
+}
 .wind-zone-chip {
   display: flex;
   flex-direction: column;
@@ -1481,6 +1572,23 @@ body {
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 4px 8px;
+}
+.wind-time-sample-edit {
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  flex: 1;
+}
+.wind-time-sample-edit:hover {
+  text-decoration: underline;
+}
+.wind-time-sample-editing {
+  border-color: color-mix(in srgb, var(--accent, #34d399) 60%, transparent) !important;
+  background: color-mix(in srgb, var(--accent, #34d399) 10%, var(--surface2)) !important;
 }
 .wind-time-add-row {
   display: flex;
@@ -1766,6 +1874,27 @@ body {
   display: flex;
   justify-content: flex-end;
   margin-bottom: 0.5rem;
+}
+.pva-weather-comparison {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.pva-weather-comparison h4 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+.wind-historical-import {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
 }
 
 .pva-row-braking {

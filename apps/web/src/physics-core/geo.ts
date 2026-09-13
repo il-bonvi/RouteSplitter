@@ -145,3 +145,38 @@ export function computeGainLossBetween(
   else loss += Math.abs(diff);
   return { gain, loss };
 }
+
+/**
+ * Direzione media di marcia (bearing) su un'intera serie di punti, pesata per la distanza di
+ * ogni segmento — media CIRCOLARE (stessa tecnica di `circularMeanDeg` in `lib/openMeteo.ts`,
+ * qui perché è un calcolo puramente geometrico, non specifico di una fonte meteo). Serve a
+ * proiettare un vento (velocità+direzione) rappresentativo dell'intera uscita su un unico
+ * bearing, quando serve un solo scalare (es. bilancio energetico, D57/D58: `params.windKmh`
+ * è uno scalare unico per tutta l'attività, non per-zona — vedi `energyBalance.ts`).
+ * Un bearing punto-a-punto grezzo (senza pesatura) sarebbe dominato dai tratti con più
+ * campioni GPS piuttosto che da quelli più lunghi — la pesatura per distanza corregge questo.
+ */
+export function distanceWeightedMeanBearingDeg(points: Array<{ lat: number; lon: number }>): number | null {
+  let sumSin = 0;
+  let sumCos = 0;
+  let totalWeight = 0;
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1]!;
+    const b = points[i]!;
+    // Distanza equirettangolare approssimata: sufficiente come PESO relativo, non serve la
+    // precisione di una formula di grande cerchio qui.
+    const midLatRad = (((a.lat + b.lat) / 2) * Math.PI) / 180;
+    const dLatM = (b.lat - a.lat) * 111320;
+    const dLonM = (b.lon - a.lon) * 111320 * Math.cos(midLatRad);
+    const segmentDistM = Math.sqrt(dLatM * dLatM + dLonM * dLonM);
+    if (segmentDistM < 1e-6) continue;
+    const bearingRad = (bearingDeg(a.lat, a.lon, b.lat, b.lon) * Math.PI) / 180;
+    sumSin += Math.sin(bearingRad) * segmentDistM;
+    sumCos += Math.cos(bearingRad) * segmentDistM;
+    totalWeight += segmentDistM;
+  }
+  if (totalWeight === 0) return null;
+  const meanRad = Math.atan2(sumSin / totalWeight, sumCos / totalWeight);
+  const deg = (meanRad * 180) / Math.PI;
+  return deg < 0 ? deg + 360 : deg;
+}

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { sectionsToCsv, planVsActualSectionsToCsv, planVsActualFineGridToCsv, energyBalanceToCsv } from '../../src/lib/exportCsv.js';
-import { computeSections, processRoute, powerFromSpeed, type SectionBreakpoint, type PhysicsParams, type CdaSample } from '@physics-core';
+import { sectionsToCsv, planVsActualSectionsToCsv, planVsActualFineGridToCsv, energyBalanceToCsv, energyBalanceComparisonToCsv } from '../../src/lib/exportCsv.js';
+import { computeSections, processRoute, powerFromSpeed, type SectionBreakpoint, type PhysicsParams, type CdaSample, type EnergyBalanceRow } from '@physics-core';
 import { computePlanVsActualSections, computePlanVsActualFineGrid } from '../../src/lib/planVsActual.js';
 import { computeActivityEnergyBalance } from '../../src/lib/energyBalance.js';
 import type { ActivityDisplayPoint } from '../../src/activity/buildActivityDisplay.js';
@@ -201,5 +201,50 @@ describe('energyBalanceToCsv', () => {
   it('con nessuna riga produce solo l\'header', () => {
     const csv = energyBalanceToCsv([]);
     expect(csv.split('\n')).toHaveLength(1);
+  });
+});
+
+describe('energyBalanceComparisonToCsv', () => {
+  function fakeRow(residualPowerW: number): EnergyBalanceRow {
+    return {
+      timeSec: 0,
+      distKm: 0,
+      dtSec: 1,
+      gradientPct: 0,
+      speedKmh: 30,
+      powerW: 200,
+      dissipativePowerW: 190,
+      gravPowerW: 0,
+      observedDeltaKeJ: 0,
+      predictedDeltaKeJ: 0,
+      residualJ: residualPowerW,
+      residualPowerW
+    };
+  }
+
+  it('produce una riga di header + una riga per intervallo, con densità e vento nell\'intestazione', () => {
+    const baseline = [fakeRow(40), fakeRow(-10)];
+    const withWeather = [fakeRow(20), fakeRow(-5)];
+    const csv = energyBalanceComparisonToCsv(baseline, withWeather, { airDensity: 1.2, windKmh: 0 }, { airDensity: 1.18, windKmh: 8.5 });
+    const lines = csv.split('\n');
+    expect(lines).toHaveLength(1 + baseline.length);
+    expect(lines[0]).toContain('1.200');
+    expect(lines[0]).toContain('1.180');
+    expect(lines[0]).toContain('8.5');
+  });
+
+  it('la colonna delta è la differenza fra i residui ASSOLUTI, non quelli con segno', () => {
+    const baseline = [fakeRow(40)];
+    const withWeather = [fakeRow(-10)]; // magnitudine più bassa, segno invertito
+    const csv = energyBalanceComparisonToCsv(baseline, withWeather, { airDensity: 1.2, windKmh: 0 }, { airDensity: 1.18, windKmh: 0 });
+    const dataLine = csv.split('\n')[1]!;
+    const cells = dataLine.split(',');
+    // |−10| − |40| = -30 ⇒ un miglioramento, non un peggioramento
+    expect(cells[cells.length - 1]).toBe('-30');
+  });
+
+  it('tronca alla lunghezza più corta se i due array non sono allineati', () => {
+    const csv = energyBalanceComparisonToCsv([fakeRow(1), fakeRow(2)], [fakeRow(1)], { airDensity: 1.2, windKmh: 0 }, { airDensity: 1.18, windKmh: 0 });
+    expect(csv.split('\n')).toHaveLength(2); // header + 1 riga
   });
 });

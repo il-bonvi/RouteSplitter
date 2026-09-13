@@ -18,6 +18,7 @@ import { parseActivityText, type ActivityTrackPoint } from '../activity/parseAct
 import { buildCdaSamples } from '../activity/activitySamples.js';
 import { AthleteProfileCard } from './AthleteProfileCard.js';
 import { RideConditionsPanel } from './RideConditionsPanel.js';
+import { WeatherPanel } from './WeatherPanel.js';
 import { buildActivityDisplay, nearestPointTimeSec } from '../activity/buildActivityDisplay.js';
 import { RouteMap, type MapWindControlData } from './RouteMap.js';
 import { ActivityElevationChart } from './ActivityElevationChart.js';
@@ -429,6 +430,21 @@ export function ActivityAnalysisView({
       />
 
       <RideConditionsPanel physicsParams={physicsParams} onPhysicsParamsChange={onPhysicsParamsChange} />
+
+      <WeatherPanel
+        latitude={activityPoints?.[0]?.lat ?? null}
+        longitude={activityPoints?.[0]?.lon ?? null}
+        startTimeIso={activityStartIso}
+        durationHours={display ? display.durationSec / 3600 : 0}
+        physicsParams={physicsParams}
+        onPhysicsParamsChange={onPhysicsParamsChange}
+        windSpeedKmh={windSpeedKmh}
+        windDirectionDeg={windDirectionDeg}
+        onWindChange={(speed, dir) => {
+          setWindSpeedKmh(speed);
+          setWindDirectionDeg(dir);
+        }}
+      />
 
       {savedActivities.length > 0 && (
         <div className="saved-activities-section">

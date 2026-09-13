@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { processRoute, computeDynamicSections, parseClockTimeToMinutes, type PhysicsParams, type ProcessedPoint, type SectionBreakpoint, type FatigueParams } from '@physics-core';
+import { processRoute, computeDynamicSections, parseClockTimeToMinutes, computeAirDensity, distanceWeightedMeanBearingDeg, effectiveHeadwindKmh, type PhysicsParams, type ProcessedPoint, type SectionBreakpoint, type FatigueParams } from '@physics-core';
 import type { Route } from '@shared-schema';
 import { useDataStore } from '../lib/DataStoreContext.js';
 import { useSectionPlan } from '../hooks/useSectionPlan.js';
@@ -8,8 +8,11 @@ import { buildActivityDisplay, remapElevationFromRoute } from '../activity/build
 import { buildCdaSamples } from '../activity/activitySamples.js';
 import { computePlanVsActualSections, computePlanVsActualFineGrid, padSeriesToRouteEdges, isLikelyBraking, type PlanVsActualSectionRow } from '../lib/planVsActual.js';
 import { formatTime, formatDeltaTime } from '../lib/formatTime.js';
-import { planVsActualSectionsToCsv, planVsActualFineGridToCsv, energyBalanceToCsv, downloadTextFile } from '../lib/exportCsv.js';
-import { computeActivityEnergyBalance } from '../lib/energyBalance.js';
+import { planVsActualSectionsToCsv, planVsActualFineGridToCsv, energyBalanceToCsv, energyBalanceComparisonToCsv, downloadTextFile } from '../lib/exportCsv.js';
+import { computeActivityEnergyBalance, summarizeEnergyBalanceComparison } from '../lib/energyBalance.js';
+import { WeatherPanel } from './WeatherPanel.js';
+import { HistoricalWindImport } from './HistoricalWindImport.js';
+import { hourlyToWindTimeSamples, type WeatherAverageWindow, type OpenMeteoHourlyPoint } from '../lib/openMeteo.js';
 import { RouteMap, type MapWindControlData } from './RouteMap.js';
 import { ActivityElevationChart } from './ActivityElevationChart.js';
 import { ElevationChart } from './ElevationChart.js';
@@ -133,6 +136,8 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange, critica
     removeWindZoneBoundary,
     updateWindZone,
     addWindTimeSample,
+    importWindTimeSamples,
+    updateWindTimeSample,
     removeWindTimeSample,
     resetWindZones,
     setPlannedStartTime,
@@ -153,6 +158,26 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange, critica
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
   const [activityPoints, setActivityPoints] = useState<ActivityTrackPoint[] | null>(null);
+  // Istante reale di partenza dell'attività (D55) — serve solo per interrogare Open-Meteo
+  // (D57) con la data giusta, nessun altro uso in questa vista.
+  const [activityStartIso, setActivityStartIso] = useState<string | null>(null);
+  const [weatherResult, setWeatherResult] = useState<WeatherAverageWindow | null>(null);
+  // Serie oraria grezza dell'ultimo fetch riuscito (D61) — usata SOLO per importare il vento
+  // come veri WindTimeSample nella zona selezionata; il confronto api on/off sotto usa invece
+  // `weatherResult` (già mediato) e non ha bisogno della serie completa.
+  const [weatherHourly, setWeatherHourly] = useState<OpenMeteoHourlyPoint[] | null>(null);
+  // Snapshot di densità aria + vento (scalare, D57/D58) "di partenza", congelato nell'ISTANTE
+  // del fetch meteo riuscito — NON letto in diretta da `physicsParams` al momento del
+  // confronto/export: se nel frattempo si preme "Applica densità", quel valore diventerebbe
+  // uguale a quello meteo e il confronto collasserebbe a "0 di differenza ovunque" (bug reale,
+  // scoperto da un CSV esportato con densità identiche su tutte le 1284 righe, 2026-09-11).
+  // Congelandolo qui il confronto resta valido "prima vs dopo" indipendentemente da cosa si fa
+  // più tardi con i pulsanti "Applica".
+  const [preWeatherSnapshot, setPreWeatherSnapshot] = useState<{ airDensity: number; windKmh: number } | null>(null);
+  // Toggle "vedi confronto riga per riga" (D58) — stesso principio di "Verifica dati" per le
+  // altre tabelle: spento di default, la tabella (fino a migliaia di righe, una per secondo)
+  // si costruisce solo quando l'atleta la chiede davvero.
+  const [showWeatherComparisonTable, setShowWeatherComparisonTable] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Sorgente quota dell'ATTIVITÀ REALE: il barometro/GPS del device è spesso impreciso
@@ -236,6 +261,10 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange, critica
     setErrorMsg(null);
     setActivityPoints(null);
     setFileName(file.name);
+    setActivityStartIso(null);
+    setWeatherResult(null);
+    setWeatherHourly(null);
+    setPreWeatherSnapshot(null);
     try {
       const parsed = /\.fit$/i.test(file.name)
         ? await (await import('../activity/parseFitFile.js')).parseFitFile(file)
@@ -249,6 +278,7 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange, critica
         return;
       }
       setActivityPoints(parsed.points);
+      setActivityStartIso(parsed.startTimeIso);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Errore durante la lettura del file.');
     } finally {
@@ -286,6 +316,98 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange, critica
     const likelyBrakingCount = sorted.filter(w => w < -50).length;
     return { n: energyBalanceRows.length, medianResidualW: median, likelyBrakingCount };
   }, [energyBalanceRows]);
+
+  // Confronto "api on/off" (D57): stesso bilancio energetico, ricalcolato UNA VOLTA in più con
+  // la densità dell'aria E il vento impliciti dal meteo storico al posto di quelli attualmente
+  // impostati — mai al posto del calcolo "vero" sopra (che resta quello che guida tutto il
+  // resto della vista), solo per rispondere empiricamente a "questo dato aiuta o no?".
+  const weatherAirDensity = useMemo(
+    () =>
+      weatherResult?.temperatureC != null && weatherResult?.surfacePressureHPa != null
+        ? computeAirDensity(weatherResult.temperatureC, weatherResult.surfacePressureHPa)
+        : null,
+    [weatherResult]
+  );
+
+  // Bearing medio (pesato per distanza) dell'intera uscita — serve a proiettare il vento
+  // meteo (velocità+direzione) su un UNICO scalare headwind, perché il bilancio energetico
+  // accetta solo `params.windKmh` come scalare per tutta l'attività, non per-zona (limite
+  // noto, vedi `energyBalance.ts`). Un'approssimazione onesta: un'uscita con cambi di
+  // direzione importanti (a U, ad anello) avrà un vento "medio" meno rappresentativo di
+  // qualunque punto specifico — informativo per validare densità/vento nel complesso, non un
+  // sostituto della stima per-sezione già disponibile altrove.
+  const meanBearingDeg = useMemo(
+    () => (effectiveActivityPoints ? distanceWeightedMeanBearingDeg(effectiveActivityPoints) : null),
+    [effectiveActivityPoints]
+  );
+
+  const weatherEffectiveWindKmh = useMemo(
+    () =>
+      weatherResult?.windSpeedKmh != null && weatherResult?.windDirectionDeg != null && meanBearingDeg != null
+        ? effectiveHeadwindKmh(weatherResult.windSpeedKmh, weatherResult.windDirectionDeg, meanBearingDeg)
+        : null,
+    [weatherResult, meanBearingDeg]
+  );
+
+  const energyBalanceRowsWithWeather = useMemo(() => {
+    if (!energyOpen || !display || weatherAirDensity == null) return [];
+    const weatherParams: PhysicsParams = {
+      ...physicsParams,
+      airDensity: weatherAirDensity,
+      windKmh: weatherEffectiveWindKmh ?? physicsParams.windKmh
+    };
+    return computeActivityEnergyBalance(display.points, weatherParams, { smoothingSeconds: energySmoothingSeconds });
+  }, [energyOpen, display, physicsParams, weatherAirDensity, weatherEffectiveWindKmh, energySmoothingSeconds]);
+
+  // "Prima" del confronto: lo snapshot congelato al momento del fetch (vedi commento su
+  // `preWeatherSnapshot`), NON i valori live — altrimenti dopo "Applica densità" le due righe
+  // diventerebbero identiche e il confronto perderebbe senso.
+  const energyBalanceRowsBaseline = useMemo(() => {
+    if (!energyOpen || !display || preWeatherSnapshot == null) return energyBalanceRows;
+    return computeActivityEnergyBalance(display.points, { ...physicsParams, ...preWeatherSnapshot }, { smoothingSeconds: energySmoothingSeconds });
+  }, [energyOpen, display, physicsParams, preWeatherSnapshot, energySmoothingSeconds, energyBalanceRows]);
+
+  const energyComparisonSummary = useMemo(
+    () => (weatherAirDensity != null ? summarizeEnergyBalanceComparison(energyBalanceRowsBaseline, energyBalanceRowsWithWeather) : null),
+    [energyBalanceRowsBaseline, energyBalanceRowsWithWeather, weatherAirDensity]
+  );
+
+  // Tempo previsto dal PIANO, api on/off (D62): la domanda che conta davvero in un'app che
+  // serve a predire il tempo — non solo "il residuo cambia" ma "quanto cambia il tempo
+  // previsto se uso le condizioni meteo storiche invece di quelle attuali". Stesso motore
+  // (`computeDynamicSections`) già usato per `sections` sopra, ricalcolato con densità/vento
+  // meteo al posto di quelli correnti — mai al posto del calcolo vero che guida il resto della
+  // vista.
+  const weatherWindZonesPreview = useMemo(() => {
+    if (!plan || !weatherHourly || !activityStartIso || !display) return null;
+    const zoneId = sortedWindZones[activeWindZoneIndex]?.id;
+    if (!zoneId) return null;
+    const samples = hourlyToWindTimeSamples(weatherHourly, activityStartIso, display.durationSec / 3600);
+    if (samples.length === 0) return null;
+    return plan.windZones.map(z =>
+      z.id === zoneId ? { ...z, timeSamples: samples.slice(0, 12).map((s, i) => ({ id: `preview-${i}`, ...s })) } : z
+    );
+  }, [plan, weatherHourly, activityStartIso, display, sortedWindZones, activeWindZoneIndex]);
+
+  const sectionsWithWeather = useMemo(() => {
+    if (!plan || !routePoints || routePoints.length < 2 || weatherAirDensity == null) return [];
+    return computeDynamicSections(
+      plan.breakpoints,
+      routePoints,
+      { ...physicsParams, airDensity: weatherAirDensity },
+      plan.calcMode,
+      defaultPowerWatts,
+      weatherWindZonesPreview ?? plan.windZones,
+      parseClockTimeToMinutes(plan.plannedStartTime),
+      plan.smoothingWindowMeters
+    );
+  }, [plan, routePoints, weatherAirDensity, weatherWindZonesPreview, physicsParams, defaultPowerWatts]);
+
+  const plannedTimeBaselineH = useMemo(() => sections.reduce((sum, s) => sum + s.timeHours, 0), [sections]);
+  const plannedTimeWeatherH = useMemo(
+    () => (sectionsWithWeather.length > 0 ? sectionsWithWeather.reduce((sum, s) => sum + s.timeHours, 0) : null),
+    [sectionsWithWeather]
+  );
 
   const cdaBuilt = useMemo(() => (effectiveActivityPoints ? buildCdaSamples(effectiveActivityPoints) : null), [effectiveActivityPoints]);
 
@@ -636,6 +758,54 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange, critica
 
       {selectedRoute && plan && routePoints && routePoints.length > 1 && (
         <>
+          {summary && summary.actualTimeHoursTotal != null && (
+            <div className="physics-panel pva-headline-summary">
+              <div className="pva-headline-title">Risultato in breve</div>
+              <div className="pva-summary-grid">
+                <div className="pva-summary-header">
+                  <span></span>
+                  <span>{sectionsVerifyMode ? 'Verif.' : 'Pian.'}</span>
+                  <span>Reale</span>
+                  <span>Δ</span>
+                </div>
+                <div className="pva-summary-row">
+                  <span className="pva-summary-label">Tempo</span>
+                  <span className="pva-summary-val">{formatTime(summary.plannedTimeH)}</span>
+                  <span className="pva-summary-val">{formatTime(summary.actualTimeHoursTotal)}</span>
+                  {deltaTimeBadge(summary.deltaTimeHours)}
+                </div>
+                <div className="pva-summary-row">
+                  <span className="pva-summary-label">Velocità</span>
+                  <span className="pva-summary-val">{summary.plannedSpeedKmh.toFixed(1)} km/h</span>
+                  <span className="pva-summary-val">{summary.actualSpeedKmh != null ? `${summary.actualSpeedKmh.toFixed(1)} km/h` : '—'}</span>
+                  {deltaBadge(summary.deltaSpeedPct, '%')}
+                </div>
+                <div className="pva-summary-row">
+                  <span className="pva-summary-label">Potenza</span>
+                  <span className="pva-summary-val">{Math.round(summary.plannedPowerWatts)} W</span>
+                  <span className="pva-summary-val">{summary.actualPowerWatts != null ? `${Math.round(summary.actualPowerWatts)} W` : '—'}</span>
+                  {deltaBadge(summary.deltaPowerPct, '%')}
+                </div>
+              </div>
+              <p className="physics-hint">
+                Dettaglio sezione per sezione, vento, microsezioni e bilancio energetico più sotto, in "🔎 Confronto con l'uscita reale".
+              </p>
+              <p className="physics-hint">
+                <strong>Come si calcola "Pianificato"</strong>: per ogni tratto, dati pendenza (dal percorso), vento (dalle zone vento) e la
+                potenza che hai impostato (a mano o dall'ottimizzatore), il modello fisico risolve la velocità di equilibrio (potenza = resistenza
+                aerodinamica + rotolamento + gravità + attrito catena), poi tempo = distanza/velocità, sommato su tutti i tratti.
+              </p>
+              <p className="physics-hint">
+                <strong>4 CSV esportabili qui sotto, uno per scopo</strong>: "per sezione" (le tue sezioni manuali, il confronto principale)
+                · "microsezioni" (stesso confronto, griglia fine automatica, utile per un punto preciso del percorso) · "bilancio
+                energetico" (secondo per secondo, isola l'inerzia/frenate) · "confronto api on/off" (con vs senza densità/vento dal meteo
+                storico). Per farmi verificare il modello di base: quello "per sezione" basta quasi sempre.
+              </p>
+            </div>
+          )}
+
+          <div className="pva-group-divider">🛠️ Configura il piano</div>
+
           <CollapsibleSection title="📈 Statistiche percorso">
             <StatsRow route={selectedRoute} sections={sections} />
           </CollapsibleSection>
@@ -646,6 +816,16 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange, critica
 
           {plan.windZones.length >= 2 && (
             <CollapsibleSection title="💨 Zone vento">
+              <HistoricalWindImport
+                latitude={effectiveActivityPoints?.[0]?.lat ?? null}
+                longitude={effectiveActivityPoints?.[0]?.lon ?? null}
+                startTimeIso={activityStartIso}
+                durationHours={display ? display.durationSec / 3600 : 0}
+                targetZoneId={sortedWindZones[activeWindZoneIndex]?.id ?? null}
+                targetZoneLabel={sortedWindZones[activeWindZoneIndex] ? `${sortedWindZones[activeWindZoneIndex]!.distKm.toFixed(1)} km` : null}
+                plannedStartTimeMissing={plan.plannedStartTime == null}
+                onImport={(zoneId, samples) => importWindTimeSamples(zoneId, samples)}
+              />
               <WindZonesPanel
                 windZones={plan.windZones}
                 totalDistanceKm={selectedRoute.distanceKm}
@@ -656,7 +836,11 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange, critica
                 onReset={() => void resetWindZones()}
                 plannedStartTime={plan.plannedStartTime}
                 onAddTimeSample={(zoneId, minuteOfDay, speedKmh, directionDeg) => void addWindTimeSample(zoneId, minuteOfDay, speedKmh, directionDeg)}
+                onUpdateTimeSample={(zoneId, sampleId, minuteOfDay, speedKmh, directionDeg) =>
+                  void updateWindTimeSample(zoneId, sampleId, minuteOfDay, speedKmh, directionDeg)
+                }
                 onRemoveTimeSample={(zoneId, sampleId) => void removeWindTimeSample(zoneId, sampleId)}
+                windControl={windControl}
               />
             </CollapsibleSection>
           )}
@@ -787,6 +971,16 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange, critica
         <>
           <div className="physics-panel-title pva-section-divider">🆚 Confronto con l'uscita reale</div>
 
+          <div className="pva-group-divider">
+            🔎 Confronto con l'uscita reale
+            <p className="physics-hint pva-group-divider-hint">
+              Quattro viste via via più dettagliate, in quest'ordine: <strong>per sezione</strong> usa le tue sezioni manuali (il confronto
+              principale) · <strong>vento</strong> isola solo l'errore di direzione/intensità · <strong>microsezioni</strong> ripete lo
+              stesso confronto su una griglia fine automatica invece delle tue sezioni · <strong>bilancio energetico</strong> scende al
+              secondo-per-secondo includendo l'inerzia (frenate, accelerazioni) e ci mette anche il meteo storico.
+            </p>
+          </div>
+
           <CollapsibleSection title="📊 Confronto per sezione (piano manuale)">
             <div className="physics-panel pva-micro-panel">
               {sectionsWithRealPower > 0 && (
@@ -801,32 +995,10 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange, critica
               )}
 
               {summary && (
-                <div className="pva-summary-grid">
-                  <div className="pva-summary-header">
-                    <span></span>
-                    <span>{sectionsVerifyMode ? 'Verif.' : 'Pian.'}</span>
-                    <span>Reale</span>
-                    <span>Δ</span>
-                  </div>
-                  <div className="pva-summary-row">
-                    <span className="pva-summary-label">Velocità</span>
-                    <span className="pva-summary-val">{summary.plannedSpeedKmh.toFixed(1)} km/h</span>
-                    <span className="pva-summary-val">{summary.actualSpeedKmh != null ? `${summary.actualSpeedKmh.toFixed(1)} km/h` : '—'}</span>
-                    {deltaBadge(summary.deltaSpeedPct, '%')}
-                  </div>
-                  <div className="pva-summary-row">
-                    <span className="pva-summary-label">Potenza</span>
-                    <span className="pva-summary-val">{Math.round(summary.plannedPowerWatts)} W</span>
-                    <span className="pva-summary-val">{summary.actualPowerWatts != null ? `${Math.round(summary.actualPowerWatts)} W` : '—'}</span>
-                    {deltaBadge(summary.deltaPowerPct, '%')}
-                  </div>
-                  <div className="pva-summary-row">
-                    <span className="pva-summary-label">Tempo</span>
-                    <span className="pva-summary-val">{formatTime(summary.plannedTimeH)}</span>
-                    <span className="pva-summary-val">{summary.actualTimeHoursTotal != null ? formatTime(summary.actualTimeHoursTotal) : '—'}</span>
-                    {deltaTimeBadge(summary.deltaTimeHours)}
-                  </div>
-                </div>
+                <p className="physics-hint">
+                  Riepilogo (tempo/velocità/potenza) in "Risultato in breve" in cima alla pagina — si aggiorna con questo toggle. Qui sotto il
+                  dettaglio sezione per sezione.
+                </p>
               )}
 
               <div className="gara-zone">
@@ -868,9 +1040,9 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange, critica
                   type="button"
                   className="btn btn-sm ghost"
                   onClick={() => downloadTextFile(`confronto_sezioni_${safeRouteName}.csv`, planVsActualSectionsToCsv(rows), 'text/csv')}
-                  title="Esporta questa tabella (dati grezzi, non filtrati da 'Verifica dati') in CSV"
+                  title="Esporta questa tabella (dati grezzi, non filtrati da 'Verifica dati') in CSV: una riga per sezione manuale, pianificato+reale+delta"
                 >
-                  ⬇️ Esporta CSV
+                  ⬇️ Esporta CSV — per sezione
                 </button>
               </div>
 
@@ -1069,9 +1241,9 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange, critica
                     type="button"
                     className="btn btn-sm ghost"
                     onClick={() => downloadTextFile(`confronto_microsezioni_${safeRouteName}.csv`, planVsActualFineGridToCsv(microGrid), 'text/csv')}
-                    title="Esporta questa tabella (dati grezzi, non filtrati da 'Verifica dati', include pendenza e quota per bin) in CSV"
+                    title="Esporta questa tabella (dati grezzi, non filtrati da 'Verifica dati', include pendenza e quota per bin) in CSV: griglia fine automatica, utile per correlare l'errore a un punto preciso del percorso"
                   >
-                    ⬇️ Esporta CSV
+                    ⬇️ Esporta CSV — microsezioni
                   </button>
                 </div>
 
@@ -1154,10 +1326,172 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange, critica
                   className="btn btn-sm ghost"
                   disabled={energyBalanceRows.length === 0}
                   onClick={() => downloadTextFile(`bilancio_energetico_${safeRouteName}.csv`, energyBalanceToCsv(energyBalanceRows), 'text/csv')}
-                  title="Esporta il bilancio energetico secondo-per-secondo in CSV"
+                  title="Esporta il bilancio energetico secondo-per-secondo in CSV: una riga per campione reale, con il residuo (potenza non spiegata dal modello — inerzia/frenate)"
                 >
-                  ⬇️ Esporta CSV
+                  ⬇️ Esporta CSV — bilancio energetico (secondo per secondo)
                 </button>
+              </div>
+
+              <div className="pva-weather-comparison">
+                <h4>Meteo storico (Open-Meteo) — densità aria e vento "api on" vs "api off"</h4>
+                <WeatherPanel
+                  latitude={effectiveActivityPoints?.[0]?.lat ?? null}
+                  longitude={effectiveActivityPoints?.[0]?.lon ?? null}
+                  startTimeIso={activityStartIso}
+                  durationHours={display ? display.durationSec / 3600 : 0}
+                  physicsParams={physicsParams}
+                  onPhysicsParamsChange={onPhysicsParamsChange}
+                  windSpeedKmh={windControl?.speedKmh ?? 0}
+                  windDirectionDeg={windControl?.directionDeg ?? 0}
+                  onWindChange={noop}
+                  showApplyWind={false}
+                  onResult={result => {
+                    setWeatherResult(result);
+                    // Congela densità E vento "di partenza" solo su un fetch RIUSCITO (result
+                    // non null) — su errore/reset non tocca un eventuale confronto già in corso.
+                    if (result) setPreWeatherSnapshot({ airDensity: physicsParams.airDensity, windKmh: physicsParams.windKmh });
+                  }}
+                  onHourlyResult={setWeatherHourly}
+                />
+
+                {weatherAirDensity != null && energyComparisonSummary && (
+                  <>
+                    <div className="pva-summary-grid">
+                      <div className="pva-summary-header">
+                        <span></span>
+                        <span>Partenza</span>
+                        <span>Meteo</span>
+                        <span>Δ</span>
+                      </div>
+                      <div className="pva-summary-row">
+                        <span className="pva-summary-label">Tempo previsto (piano)</span>
+                        <span className="pva-summary-val">{formatTime(plannedTimeBaselineH)}</span>
+                        <span className="pva-summary-val">{plannedTimeWeatherH != null ? formatTime(plannedTimeWeatherH) : '—'}</span>
+                        {deltaTimeBadge(plannedTimeWeatherH != null ? plannedTimeWeatherH - plannedTimeBaselineH : null)}
+                      </div>
+                      <div className="pva-summary-row">
+                        <span className="pva-summary-label">Residuo mediano</span>
+                        <span className="pva-summary-val">{Math.round(energyComparisonSummary.medianAbsResidualBaselineW)} W</span>
+                        <span className="pva-summary-val">{Math.round(energyComparisonSummary.medianAbsResidualWithWeatherW)} W</span>
+                        {deltaBadge(
+                          ((energyComparisonSummary.medianAbsResidualWithWeatherW - energyComparisonSummary.medianAbsResidualBaselineW) /
+                            Math.max(1, energyComparisonSummary.medianAbsResidualBaselineW)) *
+                            100,
+                          '%',
+                          true
+                        )}
+                      </div>
+                      <div className="pva-summary-row">
+                        <span className="pva-summary-label">Residuo medio</span>
+                        <span className="pva-summary-val">{Math.round(energyComparisonSummary.meanAbsResidualBaselineW)} W</span>
+                        <span className="pva-summary-val">{Math.round(energyComparisonSummary.meanAbsResidualWithWeatherW)} W</span>
+                        {deltaBadge(
+                          ((energyComparisonSummary.meanAbsResidualWithWeatherW - energyComparisonSummary.meanAbsResidualBaselineW) /
+                            Math.max(1, energyComparisonSummary.meanAbsResidualBaselineW)) *
+                            100,
+                          '%',
+                          true
+                        )}
+                      </div>
+                      <div className="pva-summary-row">
+                        <span className="pva-summary-label">Densità aria</span>
+                        <span className="pva-summary-val">{(preWeatherSnapshot?.airDensity ?? physicsParams.airDensity).toFixed(3)} kg/m³</span>
+                        <span className="pva-summary-val">{weatherAirDensity.toFixed(3)} kg/m³</span>
+                        {deltaBadge(
+                          ((weatherAirDensity - (preWeatherSnapshot?.airDensity ?? physicsParams.airDensity)) /
+                            (preWeatherSnapshot?.airDensity ?? physicsParams.airDensity)) *
+                            100,
+                          '%'
+                        )}
+                      </div>
+                      <div className="pva-summary-row">
+                        <span className="pva-summary-label">Vento effettivo</span>
+                        <span className="pva-summary-val">{(preWeatherSnapshot?.windKmh ?? physicsParams.windKmh).toFixed(1)} km/h</span>
+                        <span className="pva-summary-val">{(weatherEffectiveWindKmh ?? physicsParams.windKmh).toFixed(1)} km/h</span>
+                        {deltaBadge((weatherEffectiveWindKmh ?? physicsParams.windKmh) - (preWeatherSnapshot?.windKmh ?? physicsParams.windKmh), ' km/h')}
+                      </div>
+                    </div>
+                    <p className="wind-panel-hint">
+                      Migliora (|residuo| più basso con il meteo) su {energyComparisonSummary.improvedCount} di {energyComparisonSummary.n}{' '}
+                      intervalli ({Math.round((100 * energyComparisonSummary.improvedCount) / energyComparisonSummary.n)}%).
+                      {weatherWindZonesPreview == null && (
+                        <span> Il tempo previsto "Meteo" qui sopra riflette solo la densità: nessuna zona vento disponibile per il vento storico.</span>
+                      )}
+                      {Math.abs((preWeatherSnapshot?.airDensity ?? physicsParams.airDensity) - weatherAirDensity) < 0.0005 &&
+                        Math.abs((preWeatherSnapshot?.windKmh ?? physicsParams.windKmh) - (weatherEffectiveWindKmh ?? physicsParams.windKmh)) <
+                          0.05 && (
+                          <span className="app-error">
+                            {' '}
+                            Densità e vento coincidono: hai già applicato i valori meteo prima di questo fetch, il confronto non è
+                            significativo — recupera di nuovo il meteo PRIMA di applicarlo per un confronto valido.
+                          </span>
+                        )}
+                    </p>
+
+                    <div className="pva-export-row">
+                      <button type="button" className="btn btn-sm ghost" onClick={() => setShowWeatherComparisonTable(v => !v)}>
+                        {showWeatherComparisonTable ? '🔼 Nascondi confronto riga per riga' : '🔍 Vedi confronto riga per riga'}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-sm ghost"
+                        onClick={() =>
+                          downloadTextFile(
+                            `bilancio_energetico_confronto_meteo_${safeRouteName}.csv`,
+                            energyBalanceComparisonToCsv(
+                              energyBalanceRowsBaseline,
+                              energyBalanceRowsWithWeather,
+                              preWeatherSnapshot ?? { airDensity: physicsParams.airDensity, windKmh: physicsParams.windKmh },
+                              { airDensity: weatherAirDensity, windKmh: weatherEffectiveWindKmh ?? physicsParams.windKmh }
+                            ),
+                            'text/csv'
+                          )
+                        }
+                        title="Esporta il confronto riga per riga fra le condizioni di partenza e quelle dal meteo storico"
+                      >
+                        ⬇️ Esporta CSV — confronto api on/off
+                      </button>
+                    </div>
+
+                    {showWeatherComparisonTable && (
+                      <div className="sections-table-wrap pva-micro-table-wrap">
+                        <table className="sections-table pva-micro-table">
+                          <thead>
+                            <tr>
+                              <th>Tempo (s)</th>
+                              <th>Dist. (km)</th>
+                              <th>Pend.</th>
+                              <th>Vel.</th>
+                              <th>Pot.</th>
+                              <th>Residuo partenza</th>
+                              <th>Residuo meteo</th>
+                              <th>Δ |residuo|</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {energyBalanceRowsBaseline.map((b, i) => {
+                              const w = energyBalanceRowsWithWeather[i];
+                              if (!w) return null;
+                              const deltaAbs = Math.abs(w.residualPowerW) - Math.abs(b.residualPowerW);
+                              return (
+                                <tr key={i}>
+                                  <td>{b.timeSec.toFixed(0)}</td>
+                                  <td>{b.distKm.toFixed(2)}</td>
+                                  <td>{b.gradientPct.toFixed(1)}%</td>
+                                  <td>{b.speedKmh.toFixed(1)} km/h</td>
+                                  <td>{Math.round(b.powerW)} W</td>
+                                  <td>{Math.round(b.residualPowerW)} W</td>
+                                  <td>{Math.round(w.residualPowerW)} W</td>
+                                  <td>{deltaBadge(deltaAbs, 'W', true)}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </>
+                )}
               </div>
             </div>
           </CollapsibleSection>

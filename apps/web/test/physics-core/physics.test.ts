@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { wheelPowerAtSpeed, speedFromPower, powerFromSpeed, estimateCda, effectiveCda, GRAVITY } from '../../src/physics-core/physics.js';
+import { wheelPowerAtSpeed, speedFromPower, powerFromSpeed, estimateCda, effectiveCda, computeAirDensity, GRAVITY } from '../../src/physics-core/physics.js';
 import type { PhysicsParams } from '../../src/physics-core/types.js';
 
 const baseParams: PhysicsParams = {
@@ -164,5 +164,23 @@ describe('effectiveCda — CdA a soglie multiple, opzionali (0, 1 o N)', () => {
     const vTiered = speedFromPower(220, 7, tiered);
     const vFlatOnly = speedFromPower(220, 7, flatOnly);
     expect(vTiered).toBeLessThan(vFlatOnly);
+  });
+});
+
+describe('computeAirDensity', () => {
+  it('riproduce il valore standard ISA (15°C, 1013.25 hPa ⇒ 1.225 kg/m³)', () => {
+    expect(computeAirDensity(15, 1013.25)).toBeCloseTo(1.225, 3);
+  });
+
+  it('più caldo ⇒ aria meno densa, a parità di pressione', () => {
+    const cold = computeAirDensity(0, 1013.25);
+    const hot = computeAirDensity(35, 1013.25);
+    expect(hot).toBeLessThan(cold);
+  });
+
+  it('più pressione ⇒ aria più densa, a parità di temperatura (es. quota più bassa)', () => {
+    const highPressure = computeAirDensity(15, 1013.25); // livello del mare
+    const lowPressure = computeAirDensity(15, 850); // ~1500m di quota circa
+    expect(lowPressure).toBeLessThan(highPressure);
   });
 });

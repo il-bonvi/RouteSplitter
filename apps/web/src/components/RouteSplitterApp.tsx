@@ -174,6 +174,7 @@ export function RouteSplitterApp() {
     removeWindZoneBoundary,
     updateWindZone,
     addWindTimeSample,
+    updateWindTimeSample,
     removeWindTimeSample,
     resetWindZones,
     setPlannedStartTime,
@@ -467,7 +468,11 @@ export function RouteSplitterApp() {
               onReset={() => void resetWindZones()}
               plannedStartTime={plan.plannedStartTime}
               onAddTimeSample={(zoneId, minuteOfDay, speedKmh, directionDeg) => void addWindTimeSample(zoneId, minuteOfDay, speedKmh, directionDeg)}
+              onUpdateTimeSample={(zoneId, sampleId, minuteOfDay, speedKmh, directionDeg) =>
+                void updateWindTimeSample(zoneId, sampleId, minuteOfDay, speedKmh, directionDeg)
+              }
               onRemoveTimeSample={(zoneId, sampleId) => void removeWindTimeSample(zoneId, sampleId)}
+              windControl={windControl}
             />
           )}
 

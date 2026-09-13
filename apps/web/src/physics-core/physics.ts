@@ -118,3 +118,24 @@ export function estimateCda(
   const cda = (2 * aeroForce) / (params.airDensity * rel * Math.abs(rel));
   return cda > 0.1 && cda < 0.8 ? cda : null;
 }
+
+const R_SPECIFIC_DRY_AIR = 287.05; // J/(kg·K)
+
+/**
+ * Densità dell'aria (kg/m³) dalla legge dei gas ideali per aria secca: ρ = P / (R·T).
+ * Input: temperatura in °C, pressione ALLA QUOTA DEL PUNTO (non ridotta al livello del
+ * mare — usare `surface_pressure`, non `pressure_msl`, quando la fonte è un'API meteo: la
+ * pressione sul livello del mare sovrastimerebbe sistematicamente la densità su un percorso
+ * in quota).
+ *
+ * Approssimazione deliberata: ignora l'umidità. L'aria umida è leggermente MENO densa
+ * dell'aria secca a parità di P/T (il vapore acqueo ha massa molare minore dell'azoto/
+ * ossigeno) ma l'effetto resta sotto l'1% anche con umidità relativa alta — trascurabile
+ * rispetto all'incertezza già presente su CdA/Crr in questo modello. Verificata contro il
+ * valore standard ISA (15°C, 1013.25 hPa → 1.225 kg/m³, vedi test).
+ */
+export function computeAirDensity(temperatureC: number, pressureHPa: number): number {
+  const temperatureKelvin = temperatureC + 273.15;
+  const pressurePa = pressureHPa * 100;
+  return pressurePa / (R_SPECIFIC_DRY_AIR * temperatureKelvin);
+}

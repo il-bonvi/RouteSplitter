@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { haversine, processRoute, getInterpolatedPoint, computeGainLossBetween } from '../../src/physics-core/geo.js';
+import { haversine, processRoute, getInterpolatedPoint, computeGainLossBetween, distanceWeightedMeanBearingDeg } from '../../src/physics-core/geo.js';
 
 describe('haversine', () => {
   it('distanza nulla tra due punti identici', () => {
@@ -71,5 +71,34 @@ describe('computeGainLossBetween — indipendente da qualunque smoothing grafico
     const { gain, loss } = computeGainLossBetween(points, 0, totalKm);
     expect(loss).toBeCloseTo(100, 0);
     expect(gain).toBeCloseTo(80, 0);
+  });
+});
+
+describe('distanceWeightedMeanBearingDeg', () => {
+  it('un percorso rettilineo verso est ha bearing ~90°', () => {
+    const points = [
+      { lat: 45, lon: 11 },
+      { lat: 45, lon: 11.01 },
+      { lat: 45, lon: 11.02 }
+    ];
+    expect(distanceWeightedMeanBearingDeg(points)!).toBeCloseTo(90, 0);
+  });
+
+  it('pesa per distanza: un tratto lungo verso nord domina su uno breve verso est', () => {
+    const points = [
+      { lat: 45, lon: 11 },
+      { lat: 45, lon: 11.001 }, // segmento breve verso est
+      { lat: 45.1, lon: 11.001 } // segmento lungo (~11km) verso nord
+    ];
+    const bearing = distanceWeightedMeanBearingDeg(points)!;
+    expect(bearing).toBeLessThan(20); // vicino a nord (0°), non a est (90°)
+  });
+
+  it('null con meno di 2 punti', () => {
+    expect(distanceWeightedMeanBearingDeg([{ lat: 45, lon: 11 }])).toBeNull();
+  });
+
+  it('null se tutti i punti coincidono (nessun segmento con distanza > 0)', () => {
+    expect(distanceWeightedMeanBearingDeg([{ lat: 45, lon: 11 }, { lat: 45, lon: 11 }])).toBeNull();
   });
 });

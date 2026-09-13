@@ -268,12 +268,57 @@ export function useSectionPlan(routeId: string | null, distanceKm: number) {
     [plan, save]
   );
 
+  /**
+   * Importa un intero blocco di campioni orari nella zona `zoneId` in UN'unica scrittura
+   * atomica (D61) — a differenza di `addWindTimeSample` (un campione alla volta, pensato per
+   * l'inserimento manuale), qui serve poter popolare una zona da una fonte esterna (es. il
+   * meteo storico Open-Meteo, D57+) senza il rischio di race condition di N chiamate in
+   * sequenza che si basano ciascuna su un `plan.windZones` potenzialmente non ancora
+   * aggiornato dalla scrittura precedente. SOSTITUISCE (non aggiunge a) i campioni esistenti
+   * della zona: un "importa" ripetuto deve dare un risultato prevedibile, non accumulare
+   * duplicati ad ogni click. Tronca a 12 campioni (limite di schema, `WindZoneBoundarySchema`)
+   * se la sorgente ne fornisce di più — un'uscita molto lunga può avere più di 12 ore utili.
+   */
+  const importWindTimeSamples = useCallback(
+    async (zoneId: string, samples: Array<{ minuteOfDay: number; speedKmh: number; directionDeg: number }>) => {
+      if (!plan) return;
+      const capped = samples.slice(0, 12).sort((a, b) => a.minuteOfDay - b.minuteOfDay);
+      const updated = plan.windZones.map(z =>
+        z.id === zoneId ? { ...z, timeSamples: capped.map(s => ({ id: generateWindZoneId(), ...s })) } : z
+      );
+      await save({ windZones: updated });
+    },
+    [plan, save]
+  );
+
   const removeWindTimeSample = useCallback(
     async (zoneId: string, sampleId: string) => {
       if (!plan) return;
       const updated = plan.windZones.map(z =>
         z.id === zoneId ? { ...z, timeSamples: z.timeSamples.filter(s => s.id !== sampleId) } : z
       );
+      await save({ windZones: updated });
+    },
+    [plan, save]
+  );
+
+  /**
+   * Modifica un campione orario ESISTENTE sul posto (D66) — a differenza di
+   * rimuovi+riaggiungi (l'unico modo disponibile finora), preserva l'id e riordina per ora
+   * in una singola scrittura atomica. Richiesta esplicita: "voglio tutto customizzabile [...]
+   * non modifichi un cazzo" — un campione importato dal meteo storico (o inserito a mano) va
+   * corretto sul posto se lo si vede sbagliato, non cancellato e ridigitato da zero.
+   */
+  const updateWindTimeSample = useCallback(
+    async (zoneId: string, sampleId: string, minuteOfDay: number, speedKmh: number, directionDeg: number) => {
+      if (!plan) return;
+      const updated = plan.windZones.map(z => {
+        if (z.id !== zoneId) return z;
+        const merged = z.timeSamples
+          .map(s => (s.id === sampleId ? { ...s, minuteOfDay, speedKmh, directionDeg } : s))
+          .sort((a, b) => a.minuteOfDay - b.minuteOfDay);
+        return { ...z, timeSamples: merged };
+      });
       await save({ windZones: updated });
     },
     [plan, save]
@@ -339,7 +384,9 @@ export function useSectionPlan(routeId: string | null, distanceKm: number) {
     removeWindZoneBoundary,
     updateWindZone,
     addWindTimeSample,
+    importWindTimeSamples,
     removeWindTimeSample,
+    updateWindTimeSample,
     resetWindZones,
     clearWindZones,
     setPlannedStartTime,

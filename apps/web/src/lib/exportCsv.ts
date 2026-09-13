@@ -195,6 +195,50 @@ export function energyBalanceToCsv(rows: EnergyBalanceRow[]): string {
   return [header, ...dataRows].map(row => row.map(csvCell).join(',')).join('\n');
 }
 
+/**
+ * Confronto "con vs senza" un override di densità dell'aria E vento (tipicamente da
+ * Open-Meteo, D57/D58) sullo STESSO bilancio energetico — una riga per intervallo, entrambi i
+ * residui affiancati più il delta, per rispondere empiricamente a "il meteo storico avvicina o
+ * allontana il modello dai dati osservati?" in un unico file, senza dover esportare due CSV
+ * separati e confrontarli a mano (stesso principio già seguito per `planVsActualSectionsToCsv`:
+ * il confronto va nel dato esportato, non lasciato a un'analisi esterna che deve prima
+ * riallineare due file per indice/tempo).
+ */
+export function energyBalanceComparisonToCsv(
+  baseline: EnergyBalanceRow[],
+  withWeather: EnergyBalanceRow[],
+  baselineParams: { airDensity: number; windKmh: number },
+  weatherParams: { airDensity: number; windKmh: number }
+): string {
+  const header = [
+    'Tempo (s)',
+    'Distanza (km)',
+    'Pendenza (%)',
+    'Velocità (km/h)',
+    'Potenza (W)',
+    `Residuo di partenza (W, densità ${baselineParams.airDensity.toFixed(3)} kg/m³, vento ${baselineParams.windKmh.toFixed(1)} km/h)`,
+    `Residuo con meteo (W, densità ${weatherParams.airDensity.toFixed(3)} kg/m³, vento ${weatherParams.windKmh.toFixed(1)} km/h)`,
+    'Delta |residuo| (W, negativo = il meteo migliora)'
+  ];
+  const n = Math.min(baseline.length, withWeather.length);
+  const rows: (string | number)[][] = [];
+  for (let i = 0; i < n; i++) {
+    const b = baseline[i]!;
+    const w = withWeather[i]!;
+    rows.push([
+      b.timeSec.toFixed(1),
+      b.distKm.toFixed(3),
+      b.gradientPct.toFixed(2),
+      b.speedKmh.toFixed(2),
+      Math.round(b.powerW),
+      Math.round(b.residualPowerW),
+      Math.round(w.residualPowerW),
+      Math.round(Math.abs(w.residualPowerW) - Math.abs(b.residualPowerW))
+    ]);
+  }
+  return [header, ...rows].map(row => row.map(csvCell).join(',')).join('\n');
+}
+
 export function downloadTextFile(filename: string, content: string, mimeType: string): void {
   const blob = new Blob([content], { type: `${mimeType};charset=utf-8;` });
   const url = URL.createObjectURL(blob);
