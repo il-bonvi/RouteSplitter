@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { processRoute, computeDynamicSections, parseClockTimeToMinutes, type ProcessedPoint } from '@physics-core';
-import { DEFAULT_PHYSICS_PARAMS, type Route, type RawTrackPoint, type PhysicsParams, type Tire, type Activity, type CreateActivityInput } from '@shared-schema';
+import { DEFAULT_PHYSICS_PARAMS, type Route, type RawTrackPoint, type PhysicsParams, type PhysicsParamsOverride, type Tire, type Activity, type CreateActivityInput } from '@shared-schema';
 import { useDataStore } from '../lib/DataStoreContext.js';
 import type { ActivityTrackPoint } from '../activity/parseActivityFile.js';
 import { useSectionPlan } from '../hooks/useSectionPlan.js';
@@ -65,6 +65,22 @@ export function RouteSplitterApp() {
       if (athlete.weightKg != null) {
         setPhysicsParams(p => ({ ...p, riderMassKg: athlete.weightKg! }));
       }
+      // D69: peso attrezzatura e CdA sono "default dell'atleta" tanto quanto il peso — prima
+      // di questa correzione `athlete.physicsDefaults` esisteva nello schema ma non veniva
+      // MAI letto né scritto da nessuna parte dell'app: bikeMassKg/cda restavano sempre
+      // DEFAULT_PHYSICS_PARAMS a ogni reload, mentre solo riderMassKg (campo dedicato
+      // `weightKg`, separato da `physicsDefaults`) sopravviveva. Bug segnalato dall'utente:
+      // "mi salva solo il peso dell'atleta". Crr NON è incluso qui deliberatamente — resta
+      // proprietà del pneumatico scelto (vedi commento in AthleteProfileCard.tsx), non
+      // dell'atleta.
+      if (athlete.physicsDefaults) {
+        const { bikeMassKg, cda } = athlete.physicsDefaults;
+        setPhysicsParams(p => ({
+          ...p,
+          ...(bikeMassKg != null ? { bikeMassKg } : {}),
+          ...(cda != null ? { cda } : {})
+        }));
+      }
       if (athlete.criticalPowerW != null) setCriticalPowerW(athlete.criticalPowerW);
       if (athlete.wPrimeJ != null) setWPrimeJ(athlete.wPrimeJ);
       const tireList = await store.tires.listByAthlete(athlete.id);
@@ -82,9 +98,23 @@ export function RouteSplitterApp() {
   }, [athleteId, store]);
 
   const saveAthleteProfile = useCallback(
-    async (patch: { weightKg?: number; criticalPowerW?: number; wPrimeJ?: number }) => {
+    async (patch: { weightKg?: number; criticalPowerW?: number; wPrimeJ?: number; bikeMassKg?: number; cda?: number }) => {
       const id = await ensureAthleteId();
-      await store.athletes.update(id, patch);
+      const { weightKg, criticalPowerW, wPrimeJ, bikeMassKg, cda } = patch;
+      // Merge esplicito con `physicsDefaults` esistente (non un semplice spread nel patch):
+      // `athletes.update` fa un merge SHALLOW a livello di entità (vedi athleteRepository.ts),
+      // quindi passare solo `{ physicsDefaults: { cda } }` cancellerebbe silenziosamente un
+      // eventuale bikeMassKg già salvato in precedenza (o viceversa).
+      let physicsDefaults: PhysicsParamsOverride | undefined;
+      if (bikeMassKg != null || cda != null) {
+        const current = await store.athletes.get(id);
+        physicsDefaults = {
+          ...(current?.physicsDefaults ?? {}),
+          ...(bikeMassKg != null ? { bikeMassKg } : {}),
+          ...(cda != null ? { cda } : {})
+        };
+      }
+      await store.athletes.update(id, { weightKg, criticalPowerW, wPrimeJ, ...(physicsDefaults ? { physicsDefaults } : {}) });
     },
     [ensureAthleteId, store]
   );
@@ -472,6 +502,7 @@ export function RouteSplitterApp() {
                 void updateWindTimeSample(zoneId, sampleId, minuteOfDay, speedKmh, directionDeg)
               }
               onRemoveTimeSample={(zoneId, sampleId) => void removeWindTimeSample(zoneId, sampleId)}
+              onSetTimeSamplesEnabled={(zoneId, enabled) => void updateWindZone(zoneId, { timeSamplesEnabled: enabled })}
               windControl={windControl}
             />
           )}

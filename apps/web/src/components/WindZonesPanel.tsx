@@ -52,6 +52,8 @@ interface WindZonesPanelProps {
   onAddTimeSample: (zoneId: string, minuteOfDay: number, speedKmh: number, directionDeg: number) => void;
   onUpdateTimeSample: (zoneId: string, sampleId: string, minuteOfDay: number, speedKmh: number, directionDeg: number) => void;
   onRemoveTimeSample: (zoneId: string, sampleId: string) => void;
+  /** D67 — attiva/disattiva l'uso dei campioni orari della zona senza cancellarli. */
+  onSetTimeSamplesEnabled: (zoneId: string, enabled: boolean) => void;
   /** Stessi dati/callback già passati a `<RouteMap windControl>` (D63) — la bussola qui e
    * quella sulla mappa modificano la STESSA zona attiva, nessuno stato duplicato. `null` se
    * nessuna zona è selezionabile (vedi `activeWindZoneIndex` nel chiamante). */
@@ -188,6 +190,7 @@ export function WindZonesPanel({
   onAddTimeSample,
   onUpdateTimeSample,
   onRemoveTimeSample,
+  onSetTimeSamplesEnabled,
   windControl
 }: WindZonesPanelProps) {
   const [splitKm, setSplitKm] = useState(0);
@@ -275,10 +278,23 @@ export function WindZonesPanel({
             )}
           </div>
           {selectedZone && selectedZone.timeSamples.length > 0 && (
-            <p className="wind-panel-hint wind-time-override-banner">
-              ⚡ Questa zona ha <strong>{selectedZone.timeSamples.length} campioni orari attivi</strong> (elenco qui sotto): il piano userà
-              quelli, non il vento di base qui sopra, per gli orari che coprono. Il vento di base vale solo fuori da quegli orari.
-            </p>
+            selectedZone.timeSamplesEnabled === false ? (
+              <p className="wind-panel-hint wind-time-override-banner wind-time-override-disabled">
+                💤 Questa zona ha <strong>{selectedZone.timeSamples.length} campioni orari salvati</strong>, ma sono disattivati: il piano
+                usa sempre il vento di base qui sopra. I campioni restano salvati, non sono stati cancellati.{' '}
+                <button type="button" className="btn btn-sm ghost" onClick={() => onSetTimeSamplesEnabled(selectedZone.id, true)}>
+                  Riattiva campioni orari
+                </button>
+              </p>
+            ) : (
+              <p className="wind-panel-hint wind-time-override-banner">
+                ⚡ Questa zona ha <strong>{selectedZone.timeSamples.length} campioni orari attivi</strong> (elenco qui sotto): il piano userà
+                quelli, non il vento di base qui sopra, per gli orari che coprono. Il vento di base vale solo fuori da quegli orari.{' '}
+                <button type="button" className="btn btn-sm ghost" onClick={() => onSetTimeSamplesEnabled(selectedZone.id, false)}>
+                  Disattiva campioni orari
+                </button>
+              </p>
+            )
           )}
           {selectedZone && (
             <WindTimeSamplesEditor

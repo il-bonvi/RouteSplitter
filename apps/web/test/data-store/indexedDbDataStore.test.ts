@@ -39,6 +39,29 @@ describe('DataStore — flusso end-to-end', () => {
     expect(updated.wPrimeJ).toBe(22000);
   });
 
+  it(
+    'physicsDefaults (peso attrezzatura, CdA — D69): update è SHALLOW a livello di entità, quindi un patch che ' +
+      'passa solo un campo di physicsDefaults sovrascrive l\'intero oggetto — motivo per cui chi aggiorna un solo ' +
+      "campo (es. RouteSplitterApp.tsx, saveAthleteProfile) deve prima leggere l'atleta e fare il merge lui stesso",
+    async () => {
+      const athlete = await store.athletes.create({
+        coachId: null,
+        name: 'Andrea',
+        physicsDefaults: { bikeMassKg: 9, cda: 0.28 }
+      });
+      // Un patch "ingenuo" con solo cda cancella bikeMassKg (comportamento di update, non un bug:
+      // è la ragione del fetch-poi-merge lato applicativo).
+      const naive = await store.athletes.update(athlete.id, { physicsDefaults: { cda: 0.27 } });
+      expect(naive.physicsDefaults).toEqual({ cda: 0.27 });
+
+      // Il pattern corretto (merge esplicito prima dell'update, come fa saveAthleteProfile):
+      const merged = await store.athletes.update(athlete.id, {
+        physicsDefaults: { ...naive.physicsDefaults, bikeMassKg: 8.5 }
+      });
+      expect(merged.physicsDefaults).toEqual({ cda: 0.27, bikeMassKg: 8.5 });
+    }
+  );
+
   it('crea pneumatici per un atleta e li ritrova con listByAthlete', async () => {
     const athlete = await store.athletes.create({ coachId: null, name: 'Andrea' });
     await store.tires.create({ athleteId: athlete.id, name: 'GP5000 asciutto', crr: 0.004 });

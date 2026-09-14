@@ -97,9 +97,9 @@ describe('parseSectionsImport — zone vento', () => {
   const windPlan: SectionPlan = {
     ...plan,
     windZones: [
-      { id: 'w1', distKm: 0, fixed: 'start', speedKmh: null, directionDeg: null , timeSamples: [] },
-      { id: 'w2', distKm: 10, fixed: false, speedKmh: 15, directionDeg: 90 , timeSamples: [] },
-      { id: 'w3', distKm: 20, fixed: 'finish', speedKmh: 25, directionDeg: 270 , timeSamples: [] }
+      { id: 'w1', distKm: 0, fixed: 'start', speedKmh: null, directionDeg: null, timeSamples: [], timeSamplesEnabled: true },
+      { id: 'w2', distKm: 10, fixed: false, speedKmh: 15, directionDeg: 90, timeSamples: [], timeSamplesEnabled: true },
+      { id: 'w3', distKm: 20, fixed: 'finish', speedKmh: 25, directionDeg: 270, timeSamples: [], timeSamplesEnabled: true }
     ]
   };
 
@@ -121,5 +121,43 @@ describe('parseSectionsImport — zone vento', () => {
     };
     const parsed = parseSectionsImport(JSON.stringify(legacyPayload), 20, 40);
     expect(parsed.windZones).toBeNull();
+  });
+
+  it('round-trip: timeSamplesEnabled=false sopravvive a export+import (D67)', () => {
+    const withDisabledZone: SectionPlan = {
+      ...plan,
+      windZones: [
+        { id: 'w1', distKm: 0, fixed: 'start', speedKmh: null, directionDeg: null, timeSamples: [], timeSamplesEnabled: true },
+        {
+          id: 'w2',
+          distKm: 20,
+          fixed: 'finish',
+          speedKmh: 15,
+          directionDeg: 90,
+          timeSamples: [{ id: 't1', minuteOfDay: 600, speedKmh: 25, directionDeg: 90 }],
+          timeSamplesEnabled: false
+        }
+      ]
+    };
+    const payload = buildSectionsExportPayload('Con vento disattivato', 20, withDisabledZone);
+    const parsed = parseSectionsImport(JSON.stringify(payload), 20, 40);
+    expect(parsed.windZones![1]!.timeSamplesEnabled).toBe(false);
+    expect(parsed.windZones![1]!.timeSamples).toHaveLength(1);
+  });
+
+  it('un file esportato prima di D67 (senza timeSamplesEnabled) importa come true (comportamento storico)', () => {
+    const oldFormatPayload = {
+      type: 'routesplitter-sections',
+      points: [
+        { distKm: 0, fixed: 'start', sectionLabel: null, speed: null, power: null },
+        { distKm: 20, fixed: 'finish', sectionLabel: 'S1', speed: 40, power: null }
+      ],
+      windZones: [
+        { distKm: 0, fixed: 'start', speedKmh: null, directionDeg: null },
+        { distKm: 20, fixed: 'finish', speedKmh: 15, directionDeg: 90, timeSamples: [{ minuteOfDay: 600, speedKmh: 25, directionDeg: 90 }] }
+      ]
+    };
+    const parsed = parseSectionsImport(JSON.stringify(oldFormatPayload), 20, 40);
+    expect(parsed.windZones![1]!.timeSamplesEnabled).toBe(true);
   });
 });

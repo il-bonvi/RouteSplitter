@@ -64,9 +64,9 @@ describe('windAtDistKm / makeUniformWindZones', () => {
 
   it('con più zone, restituisce il vento della zona corretta', () => {
     const zones: WindZoneBoundary[] = [
-      { id: 'a', distKm: 0, fixed: 'start', speedKmh: null, directionDeg: null, timeSamples: [] },
-      { id: 'b', distKm: 20, fixed: false, speedKmh: 10, directionDeg: 90, timeSamples: [] },
-      { id: 'c', distKm: 50, fixed: 'finish', speedKmh: 25, directionDeg: 270, timeSamples: [] }
+      { id: 'a', distKm: 0, fixed: 'start', speedKmh: null, directionDeg: null, timeSamples: [], timeSamplesEnabled: true },
+      { id: 'b', distKm: 20, fixed: false, speedKmh: 10, directionDeg: 90, timeSamples: [], timeSamplesEnabled: true },
+      { id: 'c', distKm: 50, fixed: 'finish', speedKmh: 25, directionDeg: 270, timeSamples: [], timeSamplesEnabled: true }
     ];
     expect(windAtDistKm(zones, 5)).toEqual({ speedKmh: 10, directionDeg: 90 });
     expect(windAtDistKm(zones, 19.9)).toEqual({ speedKmh: 10, directionDeg: 90 });
@@ -96,8 +96,8 @@ describe('parseClockTimeToMinutes', () => {
 
 describe('windAtDistKmTime', () => {
   const zonesNoTime: WindZoneBoundary[] = [
-    { id: 's', distKm: 0, fixed: 'start', speedKmh: null, directionDeg: null, timeSamples: [] },
-    { id: 'f', distKm: 100, fixed: 'finish', speedKmh: 15, directionDeg: 90, timeSamples: [] }
+    { id: 's', distKm: 0, fixed: 'start', speedKmh: null, directionDeg: null, timeSamples: [], timeSamplesEnabled: true },
+    { id: 'f', distKm: 100, fixed: 'finish', speedKmh: 15, directionDeg: 90, timeSamples: [], timeSamplesEnabled: true }
   ];
 
   it('senza timeSamples si comporta come windAtDistKm (comportamento storico)', () => {
@@ -107,14 +107,15 @@ describe('windAtDistKmTime', () => {
 
   it('con timeSamples ma minuteOfDay null, ricade sul valore statico della zona', () => {
     const zones: WindZoneBoundary[] = [
-      { id: 's', distKm: 0, fixed: 'start', speedKmh: null, directionDeg: null, timeSamples: [] },
+      { id: 's', distKm: 0, fixed: 'start', speedKmh: null, directionDeg: null, timeSamples: [], timeSamplesEnabled: true },
       {
         id: 'f',
         distKm: 100,
         fixed: 'finish',
         speedKmh: 5,
         directionDeg: 0,
-        timeSamples: [{ id: 't1', minuteOfDay: 600, speedKmh: 20, directionDeg: 90 }]
+        timeSamples: [{ id: 't1', minuteOfDay: 600, speedKmh: 20, directionDeg: 90 }],
+        timeSamplesEnabled: true
       }
     ];
     expect(windAtDistKmTime(zones, 50, null)).toEqual({ speedKmh: 5, directionDeg: 0 });
@@ -122,8 +123,16 @@ describe('windAtDistKmTime', () => {
 
   it('con un solo timeSample, usa sempre quel valore indipendentemente dall\'ora', () => {
     const zones: WindZoneBoundary[] = [
-      { id: 's', distKm: 0, fixed: 'start', speedKmh: null, directionDeg: null, timeSamples: [] },
-      { id: 'f', distKm: 100, fixed: 'finish', speedKmh: 0, directionDeg: 0, timeSamples: [{ id: 't1', minuteOfDay: 600, speedKmh: 12, directionDeg: 45 }] }
+      { id: 's', distKm: 0, fixed: 'start', speedKmh: null, directionDeg: null, timeSamples: [], timeSamplesEnabled: true },
+      {
+        id: 'f',
+        distKm: 100,
+        fixed: 'finish',
+        speedKmh: 0,
+        directionDeg: 0,
+        timeSamples: [{ id: 't1', minuteOfDay: 600, speedKmh: 12, directionDeg: 45 }],
+        timeSamplesEnabled: true
+      }
     ];
     expect(windAtDistKmTime(zones, 50, 400)).toEqual({ speedKmh: 12, directionDeg: 45 });
     expect(windAtDistKmTime(zones, 50, 900)).toEqual({ speedKmh: 12, directionDeg: 45 });
@@ -131,7 +140,7 @@ describe('windAtDistKmTime', () => {
 
   it('interpola linearmente intensità fra due campioni orari', () => {
     const zones: WindZoneBoundary[] = [
-      { id: 's', distKm: 0, fixed: 'start', speedKmh: null, directionDeg: null, timeSamples: [] },
+      { id: 's', distKm: 0, fixed: 'start', speedKmh: null, directionDeg: null, timeSamples: [], timeSamplesEnabled: true },
       {
         id: 'f',
         distKm: 100,
@@ -141,7 +150,8 @@ describe('windAtDistKmTime', () => {
         timeSamples: [
           { id: 't1', minuteOfDay: 480, speedKmh: 10, directionDeg: 0 },
           { id: 't2', minuteOfDay: 720, speedKmh: 20, directionDeg: 0 }
-        ]
+        ],
+        timeSamplesEnabled: true
       }
     ];
     // A metà strada in minuti (600) ci si aspetta intensità a metà strada (15)
@@ -151,7 +161,7 @@ describe('windAtDistKmTime', () => {
 
   it('clampa ai bordi fuori dal range dei campioni orari (nessuna estrapolazione)', () => {
     const zones: WindZoneBoundary[] = [
-      { id: 's', distKm: 0, fixed: 'start', speedKmh: null, directionDeg: null, timeSamples: [] },
+      { id: 's', distKm: 0, fixed: 'start', speedKmh: null, directionDeg: null, timeSamples: [], timeSamplesEnabled: true },
       {
         id: 'f',
         distKm: 100,
@@ -161,7 +171,8 @@ describe('windAtDistKmTime', () => {
         timeSamples: [
           { id: 't1', minuteOfDay: 480, speedKmh: 10, directionDeg: 0 },
           { id: 't2', minuteOfDay: 720, speedKmh: 20, directionDeg: 0 }
-        ]
+        ],
+        timeSamplesEnabled: true
       }
     ];
     expect(windAtDistKmTime(zones, 50, 100)!.speedKmh).toBeCloseTo(10, 6);
@@ -170,7 +181,7 @@ describe('windAtDistKmTime', () => {
 
   it('interpola la direzione correttamente attraverso il wraparound 0/360', () => {
     const zones: WindZoneBoundary[] = [
-      { id: 's', distKm: 0, fixed: 'start', speedKmh: null, directionDeg: null, timeSamples: [] },
+      { id: 's', distKm: 0, fixed: 'start', speedKmh: null, directionDeg: null, timeSamples: [], timeSamplesEnabled: true },
       {
         id: 'f',
         distKm: 100,
@@ -180,11 +191,46 @@ describe('windAtDistKmTime', () => {
         timeSamples: [
           { id: 't1', minuteOfDay: 480, speedKmh: 10, directionDeg: 350 },
           { id: 't2', minuteOfDay: 720, speedKmh: 10, directionDeg: 10 }
-        ]
+        ],
+        timeSamplesEnabled: true
       }
     ];
     const w = windAtDistKmTime(zones, 50, 600);
     // Deve passare per 0°/360°, non per 180°
     expect(w!.directionDeg === 0 || w!.directionDeg > 350 || w!.directionDeg < 10).toBe(true);
+  });
+
+  it("con timeSamples ma timeSamplesEnabled=false, ricade sul valore statico anche con minuteOfDay noto (D67)", () => {
+    const zones: WindZoneBoundary[] = [
+      { id: 's', distKm: 0, fixed: 'start', speedKmh: null, directionDeg: null, timeSamples: [], timeSamplesEnabled: true },
+      {
+        id: 'f',
+        distKm: 100,
+        fixed: 'finish',
+        speedKmh: 5,
+        directionDeg: 0,
+        timeSamples: [{ id: 't1', minuteOfDay: 600, speedKmh: 20, directionDeg: 90 }],
+        timeSamplesEnabled: false
+      }
+    ];
+    expect(windAtDistKmTime(zones, 50, 600)).toEqual({ speedKmh: 5, directionDeg: 0 });
+  });
+
+  it('riattivando timeSamplesEnabled, i campioni orari tornano a essere usati senza doverli reinserire (D67)', () => {
+    const disabled: WindZoneBoundary[] = [
+      { id: 's', distKm: 0, fixed: 'start', speedKmh: null, directionDeg: null, timeSamples: [], timeSamplesEnabled: true },
+      {
+        id: 'f',
+        distKm: 100,
+        fixed: 'finish',
+        speedKmh: 5,
+        directionDeg: 0,
+        timeSamples: [{ id: 't1', minuteOfDay: 600, speedKmh: 20, directionDeg: 90 }],
+        timeSamplesEnabled: false
+      }
+    ];
+    const reEnabled = disabled.map(z => ({ ...z, timeSamplesEnabled: true }));
+    expect(windAtDistKmTime(disabled, 50, 600)).toEqual({ speedKmh: 5, directionDeg: 0 });
+    expect(windAtDistKmTime(reEnabled, 50, 600)).toEqual({ speedKmh: 20, directionDeg: 90 });
   });
 });

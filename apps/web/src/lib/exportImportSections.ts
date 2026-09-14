@@ -17,6 +17,8 @@ export interface SectionsExportPayload {
     directionDeg: number | null;
     /** Campo aggiunto dopo il formato originale; assente nei file esportati prima. */
     timeSamples?: Array<{ minuteOfDay: number; speedKmh: number; directionDeg: number }>;
+    /** Campo aggiunto dopo il formato originale (D67); assente = true nei file esportati prima. */
+    timeSamplesEnabled?: boolean;
   }>;
   /** Campo aggiunto dopo il formato originale; assente nei file esportati prima. */
   plannedStartTime?: string | null;
@@ -47,7 +49,8 @@ export function buildSectionsExportPayload(routeName: string, routeDistanceKm: n
       fixed: z.fixed,
       speedKmh: z.speedKmh,
       directionDeg: z.directionDeg,
-      timeSamples: z.timeSamples.map(t => ({ minuteOfDay: t.minuteOfDay, speedKmh: t.speedKmh, directionDeg: t.directionDeg }))
+      timeSamples: z.timeSamples.map(t => ({ minuteOfDay: t.minuteOfDay, speedKmh: t.speedKmh, directionDeg: t.directionDeg })),
+      timeSamplesEnabled: z.timeSamplesEnabled
     })),
     plannedStartTime: plan.plannedStartTime,
     smoothingWindowMeters: plan.smoothingWindowMeters
@@ -99,7 +102,9 @@ function parseWindZonesImport(raw: unknown, currentDistanceKm: number): WindZone
       const speedKmh = e.speedKmh != null && Number.isFinite(Number(e.speedKmh)) ? Number(e.speedKmh) : null;
       const directionDeg = e.directionDeg != null && Number.isFinite(Number(e.directionDeg)) ? Number(e.directionDeg) : null;
       const timeSamples = parseTimeSamplesImport(e.timeSamples);
-      return { id: `wz-import-${i}-${Date.now().toString(36)}`, distKm, fixed, speedKmh, directionDeg, timeSamples };
+      // Assente/non booleano nel file (formati esportati prima di D67) = true, comportamento storico.
+      const timeSamplesEnabled = typeof e.timeSamplesEnabled === 'boolean' ? e.timeSamplesEnabled : true;
+      return { id: `wz-import-${i}-${Date.now().toString(36)}`, distKm, fixed, speedKmh, directionDeg, timeSamples, timeSamplesEnabled };
     })
     .sort((a, b) => a.distKm - b.distKm);
   if (zones.length === 0) return [];

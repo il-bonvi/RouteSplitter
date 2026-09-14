@@ -145,6 +145,46 @@ describe('SectionPlanSchema — plannedStartTime e windZones.timeSamples', () =>
     expect(parsed.windZones[1]!.timeSamples).toEqual([]);
   });
 
+  it('windZones.timeSamplesEnabled è true di default (comportamento storico, D67)', () => {
+    const now = nowIso();
+    const parsed = SectionPlanSchema.parse({
+      id: 'sp1',
+      schemaVersion: 1,
+      createdAt: now,
+      updatedAt: now,
+      routeId: 'route-1',
+      name: 'Piano gara',
+      calcMode: 'speed',
+      defaultSpeedKmh: 40,
+      breakpoints: validBreakpoints,
+      windZones: [
+        { id: 'ws', distKm: 0, fixed: 'start', speedKmh: null, directionDeg: null },
+        { id: 'wf', distKm: 20, fixed: 'finish', speedKmh: 10, directionDeg: 90 }
+      ]
+    });
+    expect(parsed.windZones[1]!.timeSamplesEnabled).toBe(true);
+  });
+
+  it('accetta timeSamplesEnabled=false esplicito (D67)', () => {
+    const now = nowIso();
+    const parsed = SectionPlanSchema.parse({
+      id: 'sp1',
+      schemaVersion: 1,
+      createdAt: now,
+      updatedAt: now,
+      routeId: 'route-1',
+      name: 'Piano gara',
+      calcMode: 'speed',
+      defaultSpeedKmh: 40,
+      breakpoints: validBreakpoints,
+      windZones: [
+        { id: 'ws', distKm: 0, fixed: 'start', speedKmh: null, directionDeg: null },
+        { id: 'wf', distKm: 20, fixed: 'finish', speedKmh: 10, directionDeg: 90, timeSamplesEnabled: false }
+      ]
+    });
+    expect(parsed.windZones[1]!.timeSamplesEnabled).toBe(false);
+  });
+
   it('smoothingWindowMeters è 50 di default se non specificato', () => {
     const now = nowIso();
     const parsed = SectionPlanSchema.parse({

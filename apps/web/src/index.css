@@ -1455,6 +1455,20 @@ body {
   border-radius: 10px;
   border: 1px solid color-mix(in srgb, var(--accent, #34d399) 50%, transparent);
   background: color-mix(in srgb, var(--accent, #34d399) 8%, transparent);
+  /* Testo lungo + pulsante inline (D67): riga di testo che va a capo, non un flex-row rigido
+     (il default di .wind-panel-hint è pensato per icona+riga breve). */
+  display: block;
+  line-height: 1.5;
+}
+.wind-time-override-banner button {
+  margin-left: 4px;
+  vertical-align: baseline;
+}
+/* Zona con campioni orari disattivati (D67): stessa forma del banner attivo, tonalità neutra
+   invece che accento verde — comunica "in pausa", non "attivo". */
+.wind-time-override-disabled {
+  border-color: var(--border);
+  background: color-mix(in srgb, var(--text-muted) 8%, transparent);
 }
 .pva-headline-summary {
   border: 1px solid color-mix(in srgb, var(--accent, #34d399) 45%, var(--border));
@@ -1777,6 +1791,13 @@ body {
 }
 .pva-upload-row {
   margin-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.pva-create-route-hint {
+  max-width: 640px;
 }
 .pva-selectors {
   display: flex;

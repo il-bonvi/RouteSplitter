@@ -9,6 +9,22 @@ export interface ActivityDisplayPoint extends ProcessedPoint {
 }
 
 /**
+ * Riempie le quote mancanti (rare, es. GPX minimale o buchi del barometro) ripetendo l'ultima
+ * quota nota — non altera la pendenza dei punti circostanti, che dipende solo dai punti
+ * EFFETTIVAMENTE misurati. Estratta da `buildActivityDisplay` perché serve anche a chi vuole
+ * usare gli stessi punti come `RawTrackPoint[]` per `processRoute` fuori da questa funzione
+ * (es. creare un `Route` persistito direttamente da un'attività — D68).
+ */
+export function fillMissingElevation(points: ActivityTrackPoint[]): RawTrackPoint[] {
+  const valid = points.filter(p => Number.isFinite(p.lat) && Number.isFinite(p.lon));
+  let lastEle = valid.find(p => p.ele != null)?.ele ?? 0;
+  return valid.map(p => {
+    if (p.ele != null) lastEle = p.ele;
+    return { lat: p.lat, lon: p.lon, ele: lastEle };
+  });
+}
+
+/**
  * Sostituisce la quota di ogni punto attività con quella interpolata dal PERCORSO
  * PIANIFICATO (`routePoints`, il GPX caricato per quel percorso) alla stessa distanza
  * percorsa — non alla stessa quota registrata dal device. Utile quando il device (barometro
@@ -83,11 +99,7 @@ export function buildActivityDisplay(points: ActivityTrackPoint[]): ActivityDisp
   const valid = points.filter(p => Number.isFinite(p.lat) && Number.isFinite(p.lon) && Number.isFinite(p.timeSec));
   if (valid.length < 2) return null;
 
-  let lastEle = valid.find(p => p.ele != null)?.ele ?? 0;
-  const rawPoints: RawTrackPoint[] = valid.map(p => {
-    if (p.ele != null) lastEle = p.ele;
-    return { lat: p.lat, lon: p.lon, ele: lastEle };
-  });
+  const rawPoints = fillMissingElevation(valid);
 
   const processed = processRoute(rawPoints);
 

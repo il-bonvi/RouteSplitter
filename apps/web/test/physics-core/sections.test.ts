@@ -116,14 +116,15 @@ describe('computeSections — vento time-aware (plannedStartMinuteOfDay)', () =>
       { id: 'finish', distKm: 20, fixed: 'finish', sectionLabel: 'S1', speedKmh: 30, powerWatts: null }
     ];
     const windZones = [
-      { id: 'ws', distKm: 0, fixed: 'start' as const, speedKmh: null, directionDeg: null, timeSamples: [] },
+      { id: 'ws', distKm: 0, fixed: 'start' as const, speedKmh: null, directionDeg: null, timeSamples: [], timeSamplesEnabled: true },
       {
         id: 'wf',
         distKm: 20,
         fixed: 'finish' as const,
         speedKmh: 5,
         directionDeg: 0,
-        timeSamples: [{ id: 't1', minuteOfDay: 600, speedKmh: 25, directionDeg: 0 }]
+        timeSamples: [{ id: 't1', minuteOfDay: 600, speedKmh: 25, directionDeg: 0 }],
+        timeSamplesEnabled: true
       }
     ];
     const sections = computeSections(breakpoints, points, params, 'speed', 250, windZones, null);
@@ -138,14 +139,15 @@ describe('computeSections — vento time-aware (plannedStartMinuteOfDay)', () =>
       { id: 'finish', distKm: 20, fixed: 'finish', sectionLabel: 'S1', speedKmh: 30, powerWatts: null }
     ];
     const windZones = [
-      { id: 'ws', distKm: 0, fixed: 'start' as const, speedKmh: null, directionDeg: null, timeSamples: [] },
+      { id: 'ws', distKm: 0, fixed: 'start' as const, speedKmh: null, directionDeg: null, timeSamples: [], timeSamplesEnabled: true },
       {
         id: 'wf',
         distKm: 20,
         fixed: 'finish' as const,
         speedKmh: 5,
         directionDeg: 0,
-        timeSamples: [{ id: 't1', minuteOfDay: 480, speedKmh: 25, directionDeg: 0 }]
+        timeSamples: [{ id: 't1', minuteOfDay: 480, speedKmh: 25, directionDeg: 0 }],
+        timeSamplesEnabled: true
       }
     ];
     // Partenza alle 8:00 (480 min) — la sezione inizia a t=0 quindi minuteOfDay=480 esatto

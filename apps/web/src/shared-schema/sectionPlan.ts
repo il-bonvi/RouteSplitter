@@ -36,7 +36,13 @@ export const WindZoneBoundarySchema = z.object({
   directionDeg: z.number().min(0).max(360).nullable(),
   /** Vuoto/assente = vento statico (comportamento storico). Tetto a 12: oltre non ha senso
    * pratico per una singola zona (un forecast tipico copre poche ore per punto). */
-  timeSamples: z.array(WindTimeSampleSchema).max(12).default([])
+  timeSamples: z.array(WindTimeSampleSchema).max(12).default([]),
+  /** Interruttore per ignorare temporaneamente `timeSamples` senza cancellarli (D67): utile
+   * per tornare a impostare il vento a mano ("come mi pare") su una zona che ha già dei
+   * campioni orari importati (es. da Open-Meteo) senza perderli — si può riattivare in
+   * qualunque momento. Default true = comportamento storico invariato (i campioni, se
+   * presenti, vengono sempre usati). */
+  timeSamplesEnabled: z.boolean().default(true)
 });
 export type WindZoneBoundary = z.infer<typeof WindZoneBoundarySchema>;
 

@@ -13,7 +13,7 @@ interface AthleteProfileCardProps {
   wPrimeJ: number | '';
   onWPrimeJChange: (v: number | '') => void;
   tires: Tire[];
-  onSaveProfile: (patch: { weightKg?: number; criticalPowerW?: number; wPrimeJ?: number }) => Promise<void>;
+  onSaveProfile: (patch: { weightKg?: number; criticalPowerW?: number; wPrimeJ?: number; bikeMassKg?: number; cda?: number }) => Promise<void>;
   onAddTire: (name: string, crr: number) => Promise<void>;
   onDeleteTire: (tireId: string) => Promise<void>;
 }
@@ -59,7 +59,9 @@ export function AthleteProfileCard({
       await onSaveProfile({
         weightKg: physicsParams.riderMassKg,
         criticalPowerW: criticalPowerW === '' ? undefined : criticalPowerW,
-        wPrimeJ: wPrimeJ === '' ? undefined : wPrimeJ
+        wPrimeJ: wPrimeJ === '' ? undefined : wPrimeJ,
+        bikeMassKg: physicsParams.bikeMassKg,
+        cda: physicsParams.cda
       });
       setJustSaved(true);
       setTimeout(() => setJustSaved(false), 2000);
@@ -89,8 +91,8 @@ export function AthleteProfileCard({
     <div className="athlete-profile-card">
       <h3>Profilo atleta</h3>
       <p className="physics-hint">
-        Peso, CP e W' salvati una volta sola — restano impostati anche dopo un reload, e valgono in tutte le tab
-        (ottimizzatore, W'bal, stima CdA).
+        Peso, peso attrezzatura, CdA, CP e W' salvati una volta sola — restano impostati anche dopo un reload, e
+        valgono in tutte le tab (ottimizzatore, W'bal, stima CdA).
       </p>
 
       <div className="athlete-profile-fields">
@@ -102,6 +104,26 @@ export function AthleteProfileCard({
             min={30}
             max={160}
             onCommit={v => onPhysicsParamsChange({ ...physicsParams, riderMassKg: v })}
+          />
+        </label>
+        <label className="physics-field" title="Bici + kit (borracce, sacche...).">
+          <span>Peso attrezzatura (kg)</span>
+          <NumberField
+            value={physicsParams.bikeMassKg}
+            step={0.5}
+            min={3}
+            max={30}
+            onCommit={v => onPhysicsParamsChange({ ...physicsParams, bikeMassKg: v })}
+          />
+        </label>
+        <label className="physics-field" title="Coefficiente aerodinamico, m². Posizione aero estrema ~0.19.">
+          <span>CdA (m²)</span>
+          <NumberField
+            value={physicsParams.cda}
+            step={0.005}
+            min={0.15}
+            max={0.6}
+            onCommit={v => onPhysicsParamsChange({ ...physicsParams, cda: v })}
           />
         </label>
         <label className="physics-field" title="Lascia vuoto per non applicare alcun vincolo di fatica altrove nell'app.">

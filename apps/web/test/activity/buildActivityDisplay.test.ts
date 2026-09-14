@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildActivityDisplay, remapElevationFromRoute } from '../../src/activity/buildActivityDisplay.js';
+import { buildActivityDisplay, remapElevationFromRoute, fillMissingElevation } from '../../src/activity/buildActivityDisplay.js';
 import { processRoute } from '@physics-core';
 import type { ActivityTrackPoint } from '../../src/activity/parseActivityFile.js';
 
@@ -74,6 +74,33 @@ describe('buildActivityDisplay', () => {
     const display = buildActivityDisplay(points)!;
     expect(display.points[1]!.ele).toBe(100); // riempito con l'ultima quota nota
     expect(display.points[2]!.ele).toBe(120);
+  });
+});
+
+describe('fillMissingElevation (D68 — estratta per riuso fuori da buildActivityDisplay)', () => {
+  it('riempie in avanti la quota mancante, come già faceva internamente buildActivityDisplay', () => {
+    const points: ActivityTrackPoint[] = [
+      trackPoint(45.0, { timeSec: 0, ele: 100 }),
+      trackPoint(45.001, { timeSec: 10, ele: null }),
+      trackPoint(45.002, { timeSec: 20, ele: 120 })
+    ];
+    const raw = fillMissingElevation(points);
+    expect(raw.map(p => p.ele)).toEqual([100, 100, 120]);
+  });
+
+  it('se nessun punto ha quota, usa 0 per tutti (percorso trattato come piatto)', () => {
+    const points: ActivityTrackPoint[] = [trackPoint(45.0, { timeSec: 0, ele: null }), trackPoint(45.001, { timeSec: 10, ele: null })];
+    const raw = fillMissingElevation(points);
+    expect(raw.map(p => p.ele)).toEqual([0, 0]);
+  });
+
+  it('scarta i punti con coordinate non finite', () => {
+    const points: ActivityTrackPoint[] = [
+      trackPoint(45.0, { timeSec: 0, ele: 100 }),
+      { ...trackPoint(45.001, { timeSec: 10, ele: 110 }), lat: NaN }
+    ];
+    const raw = fillMissingElevation(points);
+    expect(raw).toHaveLength(1);
   });
 });
 

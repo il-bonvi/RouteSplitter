@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { processRoute, computeDynamicSections, parseClockTimeToMinutes, computeAirDensity, distanceWeightedMeanBearingDeg, effectiveHeadwindKmh, type PhysicsParams, type ProcessedPoint, type SectionBreakpoint, type FatigueParams } from '@physics-core';
 import type { Route } from '@shared-schema';
 import { useDataStore } from '../lib/DataStoreContext.js';
 import { useSectionPlan } from '../hooks/useSectionPlan.js';
 import { parseActivityText, type ActivityTrackPoint } from '../activity/parseActivityFile.js';
-import { buildActivityDisplay, remapElevationFromRoute } from '../activity/buildActivityDisplay.js';
+import { buildActivityDisplay, remapElevationFromRoute, fillMissingElevation } from '../activity/buildActivityDisplay.js';
 import { buildCdaSamples } from '../activity/activitySamples.js';
 import { computePlanVsActualSections, computePlanVsActualFineGrid, padSeriesToRouteEdges, isLikelyBraking, type PlanVsActualSectionRow } from '../lib/planVsActual.js';
 import { formatTime, formatDeltaTime } from '../lib/formatTime.js';
@@ -206,10 +206,16 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange, critica
   const [energyOpen, setEnergyOpen] = useState(false);
   const [energySmoothingSeconds, setEnergySmoothingSeconds] = useState(3);
 
-  useEffect(() => {
-    void store.routes.listByAthlete(null).then(setRoutes);
-  }, [store]);
+  // Notifica informativa (non un errore) dopo "Crea percorso da questo file", per il caso di
+  // deduplica sotto — niente a che fare con `errorMsg`, che ha un altro stile visivo e un
+  // altro significato (qualcosa è andato storto).
+  const [createRouteNotice, setCreateRouteNotice] = useState<string | null>(null);
 
+  const refreshRoutes = useCallback(() => store.routes.listByAthlete(null).then(setRoutes), [store]);
+
+  useEffect(() => {
+    void refreshRoutes();
+  }, [refreshRoutes]);
   useEffect(() => {
     if (!selectedRouteId) {
       setRoutePoints(null);
@@ -259,6 +265,7 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange, critica
   const handleFile = async (file: File) => {
     setBusy(true);
     setErrorMsg(null);
+    setCreateRouteNotice(null);
     setActivityPoints(null);
     setFileName(file.name);
     setActivityStartIso(null);
@@ -285,6 +292,64 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange, critica
       setBusy(false);
     }
   };
+
+  // D68: crea un Route vero e persistito usando la traccia GPS della stessa uscita reale
+  // appena caricata sopra, invece di richiedere che un percorso sia già stato pianificato
+  // (via GPX) in tab "Percorso" prima di poter fare qualunque confronto qui. Stessa identica
+  // chiamata di creazione di un percorso da GPX (`RouteSplitterApp.tsx`, upload GPX in tab
+  // "Percorso") — cambia solo la provenienza dei punti (traccia dell'attività invece che
+  // file GPX separato) — quindi il risultato è un percorso a tutti gli effetti: appare anche
+  // in tab "Percorso", vi si costruisce sopra un piano vero (breakpoint, target, zone vento)
+  // con gli stessi identici controlli già presenti qui sotto, nessuna via ridotta.
+  const createRouteFromActivity = useCallback(async () => {
+    if (!activityPoints) return;
+    setBusy(true);
+    setErrorMsg(null);
+    setCreateRouteNotice(null);
+    try {
+      const rawPoints = fillMissingElevation(activityPoints);
+      if (rawPoints.length < 2) {
+        setErrorMsg('Traccia GPS insufficiente in questo file per crearci un percorso (servono almeno 2 punti con coordinate valide).');
+        return;
+      }
+      const processed = processRoute(rawPoints);
+
+      // Deduplica (stesso file ricaricato più volte, es. per ricontrollare un'analisi): se un
+      // percorso con lo stesso nome file sorgente e la stessa distanza (tolleranza 50m, come
+      // il controllo di coerenza export/import in RouteSplitterApp.tsx) esiste già, lo si
+      // riusa invece di crearne un altro — altrimenti ogni ricarica dello stesso FIT
+      // accumulerebbe un percorso duplicato in lista.
+      const existing =
+        fileName != null
+          ? routes.find(r => r.sourceFileName === fileName && Math.abs(r.distanceKm - processed.distanceKm) < 0.05)
+          : undefined;
+      if (existing) {
+        setSelectedRouteId(existing.id);
+        setCreateRouteNotice(`Percorso già esistente da questo file ("${existing.name}") — selezionato quello, non ne ho creato uno nuovo.`);
+        return;
+      }
+
+      const route = await store.routes.create(
+        {
+          athleteId: null,
+          name: (fileName ?? 'uscita').replace(/\.(fit|tcx|gpx)$/i, ''),
+          sourceFileName: fileName ?? undefined,
+          distanceKm: processed.distanceKm,
+          elevationGain: processed.elevationGain,
+          elevationLoss: processed.elevationLoss,
+          maxElevation: processed.maxElevation,
+          minElevation: processed.minElevation
+        },
+        rawPoints
+      );
+      await refreshRoutes();
+      setSelectedRouteId(route.id);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Errore durante la creazione del percorso da questo file.');
+    } finally {
+      setBusy(false);
+    }
+  }, [activityPoints, fileName, routes, store, refreshRoutes]);
 
   const effectiveActivityPoints = useMemo(() => {
     if (!activityPoints) return null;
@@ -751,9 +816,27 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange, critica
               e.target.value = '';
             }}
           />
+          {activityPoints && (
+            <button type="button" className="btn btn-sm ghost" onClick={() => void createRouteFromActivity()} disabled={busy}>
+              🆕 Crea percorso da questo file
+            </button>
+          )}
         </div>
+        {activityPoints && (
+          <p className="physics-hint pva-create-route-hint">
+            Niente GPX a portata di mano? Il pulsante qui sopra crea un percorso vero (appare anche in tab "Percorso")
+            usando la traccia GPS di questo stesso file — poi ci costruisci sopra un piano come faresti con un GPX,
+            oppure lasci solo partenza/arrivo e vai dritto al confronto qui sotto con "Verifica dati".
+          </p>
+        )}
         {errorMsg && <p className="app-error">{errorMsg}</p>}
-        {!selectedRoute && <p className="wind-panel-hint">Seleziona un percorso per iniziare a modificare il piano.</p>}
+        {createRouteNotice && <p className="wind-panel-hint">ℹ️ {createRouteNotice}</p>}
+        {!selectedRoute && (
+          <p className="wind-panel-hint">
+            Seleziona un percorso per iniziare a modificare il piano, oppure caricane uno qui sopra e crealo da quel
+            file (nessun GPX necessario).
+          </p>
+        )}
       </div>
 
       {selectedRoute && plan && routePoints && routePoints.length > 1 && (
@@ -814,36 +897,35 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange, critica
             <PhysicsParamsPanel params={physicsParams} onChange={onPhysicsParamsChange} calcMode={plan.calcMode} onCalcModeChange={mode => void setCalcMode(mode)} />
           </CollapsibleSection>
 
-          {plan.windZones.length >= 2 && (
-            <CollapsibleSection title="💨 Zone vento">
-              <HistoricalWindImport
-                latitude={effectiveActivityPoints?.[0]?.lat ?? null}
-                longitude={effectiveActivityPoints?.[0]?.lon ?? null}
-                startTimeIso={activityStartIso}
-                durationHours={display ? display.durationSec / 3600 : 0}
-                targetZoneId={sortedWindZones[activeWindZoneIndex]?.id ?? null}
-                targetZoneLabel={sortedWindZones[activeWindZoneIndex] ? `${sortedWindZones[activeWindZoneIndex]!.distKm.toFixed(1)} km` : null}
-                plannedStartTimeMissing={plan.plannedStartTime == null}
-                onImport={(zoneId, samples) => importWindTimeSamples(zoneId, samples)}
-              />
-              <WindZonesPanel
-                windZones={plan.windZones}
-                totalDistanceKm={selectedRoute.distanceKm}
-                selectedZoneId={selectedWindZoneId}
-                onSelectZone={setSelectedWindZoneId}
-                onAddBoundary={distKm => void addWindZoneBoundary(distKm)}
-                onRemoveBoundary={id => void removeWindZoneBoundary(id)}
-                onReset={() => void resetWindZones()}
-                plannedStartTime={plan.plannedStartTime}
-                onAddTimeSample={(zoneId, minuteOfDay, speedKmh, directionDeg) => void addWindTimeSample(zoneId, minuteOfDay, speedKmh, directionDeg)}
-                onUpdateTimeSample={(zoneId, sampleId, minuteOfDay, speedKmh, directionDeg) =>
-                  void updateWindTimeSample(zoneId, sampleId, minuteOfDay, speedKmh, directionDeg)
-                }
-                onRemoveTimeSample={(zoneId, sampleId) => void removeWindTimeSample(zoneId, sampleId)}
-                windControl={windControl}
-              />
-            </CollapsibleSection>
-          )}
+          <CollapsibleSection title="💨 Zone vento">
+            <HistoricalWindImport
+              latitude={effectiveActivityPoints?.[0]?.lat ?? null}
+              longitude={effectiveActivityPoints?.[0]?.lon ?? null}
+              startTimeIso={activityStartIso}
+              durationHours={display ? display.durationSec / 3600 : 0}
+              targetZoneId={sortedWindZones[activeWindZoneIndex]?.id ?? null}
+              targetZoneLabel={sortedWindZones[activeWindZoneIndex] ? `${sortedWindZones[activeWindZoneIndex]!.distKm.toFixed(1)} km` : null}
+              plannedStartTimeMissing={plan.plannedStartTime == null}
+              onImport={(zoneId, samples) => importWindTimeSamples(zoneId, samples)}
+            />
+            <WindZonesPanel
+              windZones={plan.windZones}
+              totalDistanceKm={selectedRoute.distanceKm}
+              selectedZoneId={selectedWindZoneId}
+              onSelectZone={setSelectedWindZoneId}
+              onAddBoundary={distKm => void addWindZoneBoundary(distKm)}
+              onRemoveBoundary={id => void removeWindZoneBoundary(id)}
+              onReset={() => void resetWindZones()}
+              plannedStartTime={plan.plannedStartTime}
+              onAddTimeSample={(zoneId, minuteOfDay, speedKmh, directionDeg) => void addWindTimeSample(zoneId, minuteOfDay, speedKmh, directionDeg)}
+              onUpdateTimeSample={(zoneId, sampleId, minuteOfDay, speedKmh, directionDeg) =>
+                void updateWindTimeSample(zoneId, sampleId, minuteOfDay, speedKmh, directionDeg)
+              }
+              onRemoveTimeSample={(zoneId, sampleId) => void removeWindTimeSample(zoneId, sampleId)}
+              onSetTimeSamplesEnabled={(zoneId, enabled) => void updateWindZone(zoneId, { timeSamplesEnabled: enabled })}
+              windControl={windControl}
+            />
+          </CollapsibleSection>
 
           <CollapsibleSection title="🎯 Ottimizzatore di pacing">
             <PacingOptimizerPanel

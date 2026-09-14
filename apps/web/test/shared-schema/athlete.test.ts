@@ -35,4 +35,14 @@ describe('AthleteSchema', () => {
     expect(() => AthleteSchema.parse({ ...base, weightKg: 70 })).not.toThrow();
     expect(() => AthleteSchema.parse({ ...base, weightKg: 7 })).toThrow();
   });
+
+  it("accetta physicsDefaults (peso attrezzatura + CdA persistenti dell'atleta, D69)", () => {
+    const parsed = AthleteSchema.parse({ ...base, physicsDefaults: { bikeMassKg: 8.5, cda: 0.29 } });
+    expect(parsed.physicsDefaults).toEqual({ bikeMassKg: 8.5, cda: 0.29 });
+  });
+
+  it('rifiuta physicsDefaults con valori fuori range (stessi guardrail di PhysicsParamsSchema)', () => {
+    expect(() => AthleteSchema.parse({ ...base, physicsDefaults: { cda: 2.8 } })).toThrow(); // refuso 0.28 -> 2.8
+    expect(() => AthleteSchema.parse({ ...base, physicsDefaults: { bikeMassKg: 1 } })).toThrow(); // sotto il minimo
+  });
 });

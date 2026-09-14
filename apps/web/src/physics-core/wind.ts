@@ -34,6 +34,13 @@ export interface WindZoneBoundary {
   directionDeg: number | null;
   /** Vedi `WindTimeSample`. Vuoto = vento statico (comportamento storico). */
   timeSamples: WindTimeSample[];
+  /** false = ignora `timeSamples` (anche se presenti) e usa sempre il vento di base
+   * `speedKmh`/`directionDeg` — permette di disattivare temporaneamente i campioni orari
+   * senza cancellarli. true = comportamento storico (i campioni, se presenti, vengono
+   * sempre usati). Campo richiesto (non opzionale) per restare strutturalmente allineato
+   * con `WindZoneBoundary` di shared-schema (stesso pattern già in uso per gli altri campi
+   * di questa interfaccia, duplicata a mano fra i due livelli). */
+  timeSamplesEnabled: boolean;
 }
 
 export interface WindAtPoint {
@@ -143,13 +150,14 @@ function interpolateTimeSamples(samples: WindTimeSample[], minuteOfDay: number):
  * Come `windAtDistKm`, ma se la zona attiva ha `timeSamples` configurati e `minuteOfDay` è
  * noto, interpola il vento nel tempo invece di usare il valore statico — pensato per un
  * futuro forecast orario reale (vedi `WindTimeSample`). Se la zona non ha campioni orari, o
- * `minuteOfDay` è null (piano senza `plannedStartTime`), il comportamento è identico a
- * `windAtDistKm` (nessuna regressione per chi non configura nulla).
+ * `minuteOfDay` è null (piano senza `plannedStartTime`), o `timeSamplesEnabled` è
+ * esplicitamente false (D67, disattivazione manuale senza cancellare i campioni), il
+ * comportamento è identico a `windAtDistKm` (nessuna regressione per chi non configura nulla).
  */
 export function windAtDistKmTime(zones: WindZoneBoundary[], distKm: number, minuteOfDay: number | null): WindAtPoint | null {
   const target = findZoneAt(zones, distKm);
   if (!target) return null;
-  if (target.timeSamples && target.timeSamples.length > 0 && minuteOfDay != null) {
+  if (target.timeSamples && target.timeSamples.length > 0 && minuteOfDay != null && target.timeSamplesEnabled !== false) {
     return interpolateTimeSamples(target.timeSamples, minuteOfDay);
   }
   if (target.speedKmh == null || target.directionDeg == null) return null;
@@ -169,7 +177,7 @@ export function parseClockTimeToMinutes(hhmm: string | null | undefined): number
 
 export function makeUniformWindZones(distanceKm: number, speedKmh = 0, directionDeg = 0): WindZoneBoundary[] {
   return [
-    { id: 'wind-start', distKm: 0, fixed: 'start', speedKmh: null, directionDeg: null, timeSamples: [] },
-    { id: 'wind-finish', distKm: distanceKm, fixed: 'finish', speedKmh, directionDeg, timeSamples: [] }
+    { id: 'wind-start', distKm: 0, fixed: 'start', speedKmh: null, directionDeg: null, timeSamples: [], timeSamplesEnabled: true },
+    { id: 'wind-finish', distKm: distanceKm, fixed: 'finish', speedKmh, directionDeg, timeSamples: [], timeSamplesEnabled: true }
   ];
 }
