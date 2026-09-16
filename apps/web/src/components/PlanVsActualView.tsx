@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { processRoute, computeDynamicSections, parseClockTimeToMinutes, computeAirDensity, distanceWeightedMeanBearingDeg, effectiveHeadwindKmh, type PhysicsParams, type ProcessedPoint, type SectionBreakpoint, type FatigueParams } from '@physics-core';
+import { processRoute, computeDynamicSections, parseClockTimeToMinutes, computeAirDensity, distanceWeightedMeanBearingDeg, effectiveHeadwindKmh, makeUniformWindZones, type PhysicsParams, type ProcessedPoint, type SectionBreakpoint, type FatigueParams } from '@physics-core';
 import type { Route } from '@shared-schema';
 import { useDataStore } from '../lib/DataStoreContext.js';
 import { useSectionPlan } from '../hooks/useSectionPlan.js';
@@ -7,8 +7,9 @@ import { parseActivityText, type ActivityTrackPoint } from '../activity/parseAct
 import { buildActivityDisplay, remapElevationFromRoute, fillMissingElevation } from '../activity/buildActivityDisplay.js';
 import { buildCdaSamples } from '../activity/activitySamples.js';
 import { computePlanVsActualSections, computePlanVsActualFineGrid, padSeriesToRouteEdges, isLikelyBraking, type PlanVsActualSectionRow } from '../lib/planVsActual.js';
+import type { FineSegment } from '../lib/pacingActions.js';
 import { formatTime, formatDeltaTime } from '../lib/formatTime.js';
-import { planVsActualSectionsToCsv, planVsActualFineGridToCsv, energyBalanceToCsv, energyBalanceComparisonToCsv, downloadTextFile } from '../lib/exportCsv.js';
+import { planVsActualSectionsToCsv, planVsActualFineGridToCsv, planVsActualFineGridComparisonToCsv, energyBalanceToCsv, energyBalanceComparisonToCsv, downloadTextFile } from '../lib/exportCsv.js';
 import { computeActivityEnergyBalance, summarizeEnergyBalanceComparison } from '../lib/energyBalance.js';
 import { WeatherPanel } from './WeatherPanel.js';
 import { HistoricalWindImport } from './HistoricalWindImport.js';
@@ -42,13 +43,6 @@ interface PlanVsActualViewProps {
 // forzava lo smontaggio/ricostruzione COMPLETA del grafico (incl. l'hover) a ogni singolo
 // movimento del mouse — proprio nel pannello dove l'hover doveva restare stabile.
 const NO_BREAKPOINTS: SectionBreakpoint[] = [];
-
-// Stesso principio di NO_BREAKPOINTS: il grafico principale "confronto con uscita reale" non
-// ha una vera griglia di microsezioni da mostrare (quella è solo nel pannello dedicato), ma
-// passarla esplicitamente qui evita di appoggiarsi al default-parameter del componente — che
-// è già stato reso sicuro (vedi ActivityElevationChart.tsx), ma un riferimento esplicito e
-// stabile è comunque più chiaro da leggere a chi apre questo file in futuro.
-const NO_MICRO_BOUNDARIES: number[] = [];
 
 function noop() {}
 
@@ -595,6 +589,57 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange, critica
     );
   }, [microOpen, plan, routePoints, physicsParams, display, cdaBuilt, microStepKm]);
 
+  // D71: confronto "con/senza meteo" alla stessa risoluzione a microsezioni, per rispondere in
+  // un colpo solo sia a "quanto perdo su curve/frenate" (colonne invariate rispetto a
+  // `microGrid`) sia a "il meteo storico aiuta qui?" — stesso principio già usato per il
+  // bilancio energetico (`energyBalanceRowsBaseline`/`WithWeather`), ma qui il vento non è
+  // uno scalare: bisogna ricostruire `windZones` alternative, non solo `physicsParams`.
+  // "Senza meteo" = le zone vento ATTUALI del piano (`plan.windZones`, qualunque cosa
+  // l'utente abbia impostato a mano), con solo la densità congelata al preWeatherSnapshot per
+  // restare un confronto stabile anche se `physicsParams.airDensity` cambia dopo (stesso
+  // motivo dietro `energyBalanceRowsBaseline`).
+  const microGridWeatherBaseline = useMemo(() => {
+    if (!microOpen || !plan || !routePoints || !display || !cdaBuilt || preWeatherSnapshot == null) return microGrid;
+    return computePlanVsActualFineGrid(
+      plan.breakpoints,
+      routePoints,
+      { ...physicsParams, ...preWeatherSnapshot },
+      plan.calcMode,
+      plan.defaultPowerWatts,
+      plan.windZones,
+      display.distanceKm,
+      cdaBuilt.samples,
+      microStepKm,
+      plan.smoothingWindowMeters
+    );
+  }, [microOpen, plan, routePoints, physicsParams, display, cdaBuilt, microStepKm, preWeatherSnapshot, microGrid]);
+
+  // "Con meteo" = UNA zona vento uniforme per tutto il percorso, costruita dal vettore
+  // vento+direzione di Open-Meteo (non dallo scalare `weatherEffectiveWindKmh` già proiettato
+  // sul bearing medio — qui, a differenza del bilancio energetico, il motore può usare il
+  // vettore vero per bin, tenendo conto della rotta reale punto per punto: più corretto, non
+  // un'approssimazione in più).
+  const weatherUniformWindZones = useMemo(() => {
+    if (weatherResult?.windSpeedKmh == null || weatherResult?.windDirectionDeg == null || !display) return null;
+    return makeUniformWindZones(display.distanceKm, weatherResult.windSpeedKmh, weatherResult.windDirectionDeg);
+  }, [weatherResult, display]);
+
+  const microGridWithWeather = useMemo(() => {
+    if (!microOpen || !plan || !routePoints || !display || !cdaBuilt || weatherAirDensity == null || !weatherUniformWindZones) return [];
+    return computePlanVsActualFineGrid(
+      plan.breakpoints,
+      routePoints,
+      { ...physicsParams, airDensity: weatherAirDensity },
+      plan.calcMode,
+      plan.defaultPowerWatts,
+      weatherUniformWindZones,
+      display.distanceKm,
+      cdaBuilt.samples,
+      microStepKm,
+      plan.smoothingWindowMeters
+    );
+  }, [microOpen, plan, routePoints, physicsParams, display, cdaBuilt, microStepKm, weatherAirDensity, weatherUniformWindZones]);
+
   const microPlannedPowerSeries = useMemo(
     () => padSeriesToRouteEdges(microGrid.map(p => ({ distKm: p.distKm, powerWatts: p.plannedPowerWatts })), display?.distanceKm ?? 0),
     [microGrid, display]
@@ -614,6 +659,22 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange, critica
   // STESSA fisica (pendenza, vento, CdA, motore dinamico) della velocità pianificata,
   // sostituendo solo la potenza in ingresso con quella reale di quel bin.
   const [microVerifyMode, setMicroVerifyMode] = useState<'planned' | 'verified'>('planned');
+
+  // D74: risultato fine di "Ottimizza completo" (potenza per bin da 50m, non collassata sulle
+  // sezioni) sollevato da PacingOptimizerPanel — permette al grafico microsezioni qui sotto di
+  // mostrare la curva VERA trovata dall'ottimizzatore invece di quella piatta/a gradini
+  // ricavata dai breakpoint (che è tutto ciò che `microPlannedPowerSeries` può vedere, dato
+  // che il piano stesso non conosce nulla di più fine dei suoi breakpoint). Reset esplicito al
+  // cambio percorso: stato di lavoro non persistito, mostrare quello di un percorso diverso
+  // sarebbe silenziosamente fuorviante.
+  const [finePlan, setFinePlan] = useState<{ segs: FineSegment[]; powers: number[] } | null>(null);
+  useEffect(() => {
+    setFinePlan(null);
+  }, [selectedRouteId]);
+  const finePlanPowerSeries = useMemo(
+    () => (finePlan ? finePlan.segs.map((s, i) => ({ distKm: (s.d0Km + s.d1Km) / 2, powerWatts: finePlan.powers[i]! })) : null),
+    [finePlan]
+  );
   const microVerifiedPowerSeries = useMemo(
     () =>
       padSeriesToRouteEdges(
@@ -669,7 +730,13 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange, critica
   // Etichetta condivisa da grafico/tabella per la modalità corrente — un solo posto dove
   // decidere il testo, invece di ripetere lo stesso ternario in 5 punti diversi della JSX.
   const microModeLabel = microVerifyMode === 'verified' ? 'Verif.' : 'Pian.';
-  const microModeChartLabel = microVerifyMode === 'verified' ? 'verificata (potenza reale)' : 'pianificata';
+  const microModeChartLabel =
+    microVerifyMode === 'verified' ? 'verificata (potenza reale)' : finePlanPowerSeries ? "ottimizzata a 50m ('Ottimizza completo')" : 'pianificata';
+  // Preferisce la curva fine vera (se è stata appena calcolata con "Ottimizza completo" in
+  // questa sessione) a quella ricavata dai breakpoint — quest'ultima è tutto ciò che il piano
+  // "sa" quando non è appena stato ottimizzato, e può essere piatta o a gradini a seconda di
+  // quante sezioni/potenze diverse ha il piano (D74).
+  const microChartPlannedPowerSeries = microVerifyMode === 'planned' && finePlanPowerSeries ? finePlanPowerSeries : microDisplayPowerSeries;
 
   // Riepilogo compatto per le microsezioni — stesso identico layout/calcolo del riepilogo
   // "Confronto per sezione" sopra (media pesata sul tempo, non aritmetica sulle sezioni):
@@ -841,52 +908,6 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange, critica
 
       {selectedRoute && plan && routePoints && routePoints.length > 1 && (
         <>
-          {summary && summary.actualTimeHoursTotal != null && (
-            <div className="physics-panel pva-headline-summary">
-              <div className="pva-headline-title">Risultato in breve</div>
-              <div className="pva-summary-grid">
-                <div className="pva-summary-header">
-                  <span></span>
-                  <span>{sectionsVerifyMode ? 'Verif.' : 'Pian.'}</span>
-                  <span>Reale</span>
-                  <span>Δ</span>
-                </div>
-                <div className="pva-summary-row">
-                  <span className="pva-summary-label">Tempo</span>
-                  <span className="pva-summary-val">{formatTime(summary.plannedTimeH)}</span>
-                  <span className="pva-summary-val">{formatTime(summary.actualTimeHoursTotal)}</span>
-                  {deltaTimeBadge(summary.deltaTimeHours)}
-                </div>
-                <div className="pva-summary-row">
-                  <span className="pva-summary-label">Velocità</span>
-                  <span className="pva-summary-val">{summary.plannedSpeedKmh.toFixed(1)} km/h</span>
-                  <span className="pva-summary-val">{summary.actualSpeedKmh != null ? `${summary.actualSpeedKmh.toFixed(1)} km/h` : '—'}</span>
-                  {deltaBadge(summary.deltaSpeedPct, '%')}
-                </div>
-                <div className="pva-summary-row">
-                  <span className="pva-summary-label">Potenza</span>
-                  <span className="pva-summary-val">{Math.round(summary.plannedPowerWatts)} W</span>
-                  <span className="pva-summary-val">{summary.actualPowerWatts != null ? `${Math.round(summary.actualPowerWatts)} W` : '—'}</span>
-                  {deltaBadge(summary.deltaPowerPct, '%')}
-                </div>
-              </div>
-              <p className="physics-hint">
-                Dettaglio sezione per sezione, vento, microsezioni e bilancio energetico più sotto, in "🔎 Confronto con l'uscita reale".
-              </p>
-              <p className="physics-hint">
-                <strong>Come si calcola "Pianificato"</strong>: per ogni tratto, dati pendenza (dal percorso), vento (dalle zone vento) e la
-                potenza che hai impostato (a mano o dall'ottimizzatore), il modello fisico risolve la velocità di equilibrio (potenza = resistenza
-                aerodinamica + rotolamento + gravità + attrito catena), poi tempo = distanza/velocità, sommato su tutti i tratti.
-              </p>
-              <p className="physics-hint">
-                <strong>4 CSV esportabili qui sotto, uno per scopo</strong>: "per sezione" (le tue sezioni manuali, il confronto principale)
-                · "microsezioni" (stesso confronto, griglia fine automatica, utile per un punto preciso del percorso) · "bilancio
-                energetico" (secondo per secondo, isola l'inerzia/frenate) · "confronto api on/off" (con vs senza densità/vento dal meteo
-                storico). Per farmi verificare il modello di base: quello "per sezione" basta quasi sempre.
-              </p>
-            </div>
-          )}
-
           <div className="pva-group-divider">🛠️ Configura il piano</div>
 
           <CollapsibleSection title="📈 Statistiche percorso">
@@ -942,6 +963,7 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange, critica
               onCriticalPowerWChange={onCriticalPowerWChange}
               wPrimeJ={wPrimeJ}
               onWPrimeJChange={onWPrimeJChange}
+              onFinePlanChange={setFinePlan}
             />
           </CollapsibleSection>
 
@@ -1111,7 +1133,6 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange, critica
                     plannedSpeedSeries={displaySpeedSeries}
                     plannedPowerLabel={sectionsVerifyMode ? 'verificata (potenza reale)' : 'pianificata'}
                     plannedSpeedLabel={sectionsVerifyMode ? 'verificata (potenza reale)' : 'pianificata'}
-                    microBoundariesKm={NO_MICRO_BOUNDARIES}
                     fatigue={fatigue}
                   />
                 </div>
@@ -1308,11 +1329,10 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange, critica
                       onAddBreakpoint={noop}
                       onRemoveBreakpoint={noop}
                       windZones={plan.windZones}
-                      plannedPowerSeries={microDisplayPowerSeries}
+                      plannedPowerSeries={microChartPlannedPowerSeries}
                       plannedSpeedSeries={microDisplaySpeedSeries}
                       plannedPowerLabel={microModeChartLabel}
                       plannedSpeedLabel={microModeChartLabel}
-                      microBoundariesKm={microBoundariesKm}
                       fatigue={fatigue}
                     />
                   </div>
@@ -1322,11 +1342,36 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange, critica
                   <button
                     type="button"
                     className="btn btn-sm ghost"
-                    onClick={() => downloadTextFile(`confronto_microsezioni_${safeRouteName}.csv`, planVsActualFineGridToCsv(microGrid), 'text/csv')}
+                    onClick={() =>
+                      downloadTextFile(`confronto_microsezioni_${safeRouteName}.csv`, planVsActualFineGridToCsv(microGrid, physicsParams, plan.windZones), 'text/csv')
+                    }
                     title="Esporta questa tabella (dati grezzi, non filtrati da 'Verifica dati', include pendenza e quota per bin) in CSV: griglia fine automatica, utile per correlare l'errore a un punto preciso del percorso"
                   >
                     ⬇️ Esporta CSV — microsezioni
                   </button>
+                  {weatherAirDensity != null && weatherResult?.windSpeedKmh != null && weatherResult?.windDirectionDeg != null && (
+                    <button
+                      type="button"
+                      className="btn btn-sm ghost"
+                      onClick={() =>
+                        downloadTextFile(
+                          `confronto_microsezioni_confronto_meteo_${safeRouteName}.csv`,
+                          planVsActualFineGridComparisonToCsv(
+                            microGridWeatherBaseline,
+                            microGridWithWeather,
+                            preWeatherSnapshot?.airDensity ?? physicsParams.airDensity,
+                            { airDensity: weatherAirDensity, windKmh: weatherResult.windSpeedKmh!, windDirectionDeg: weatherResult.windDirectionDeg! },
+                            physicsParams,
+                            plan.windZones
+                          ),
+                          'text/csv'
+                        )
+                      }
+                      title="Come sopra ma con due colonne affiancate — verificata senza e con il vento/densità storici da Open-Meteo — per capire in un colpo solo sia dove si perde su curve/frenate sia se il meteo storico avvicina o allontana il modello dai dati"
+                    >
+                      ⬇️ Esporta CSV — microsezioni + confronto meteo
+                    </button>
+                  )}
                 </div>
 
                 <div className="sections-table-wrap pva-micro-table-wrap">
@@ -1407,7 +1452,7 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange, critica
                   type="button"
                   className="btn btn-sm ghost"
                   disabled={energyBalanceRows.length === 0}
-                  onClick={() => downloadTextFile(`bilancio_energetico_${safeRouteName}.csv`, energyBalanceToCsv(energyBalanceRows), 'text/csv')}
+                  onClick={() => downloadTextFile(`bilancio_energetico_${safeRouteName}.csv`, energyBalanceToCsv(energyBalanceRows, physicsParams), 'text/csv')}
                   title="Esporta il bilancio energetico secondo-per-secondo in CSV: una riga per campione reale, con il residuo (potenza non spiegata dal modello — inerzia/frenate)"
                 >
                   ⬇️ Esporta CSV — bilancio energetico (secondo per secondo)
@@ -1524,7 +1569,8 @@ export function PlanVsActualView({ physicsParams, onPhysicsParamsChange, critica
                               energyBalanceRowsBaseline,
                               energyBalanceRowsWithWeather,
                               preWeatherSnapshot ?? { airDensity: physicsParams.airDensity, windKmh: physicsParams.windKmh },
-                              { airDensity: weatherAirDensity, windKmh: weatherEffectiveWindKmh ?? physicsParams.windKmh }
+                              { airDensity: weatherAirDensity, windKmh: weatherEffectiveWindKmh ?? physicsParams.windKmh },
+                              physicsParams
                             ),
                             'text/csv'
                           )

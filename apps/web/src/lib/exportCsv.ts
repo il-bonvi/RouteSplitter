@@ -1,7 +1,57 @@
 import type { SectionResult } from '@physics-core';
 import type { PlanVsActualSectionRow, PlanVsActualFinePoint } from './planVsActual.js';
 import { isLikelyBraking } from './planVsActual.js';
-import type { EnergyBalanceRow } from '@physics-core';
+import type { EnergyBalanceRow, WindZoneBoundary } from '@physics-core';
+import type { PhysicsParams } from '@shared-schema';
+
+/**
+ * Blocco di metadata (righe commentate con "# ") messo IN CIMA al CSV, prima dell'intestazione
+ * dati vera e propria — così chi riapre il file (Andrea in Python, o chiunque altro, umano o
+ * modello) ha SEMPRE tutto il necessario per capire con cosa è stato calcolato, senza doverlo
+ * chiedere o assumere: peso, CdA, Crr, densità aria E il vento REALMENTE impostato (numeri, non
+ * solo "vento del piano" — un'etichetta senza il valore non basta, D72). Prefisso "# "
+ * deliberato: un semplice `pd.read_csv(path, comment='#')` le salta da solo; senza, vanno
+ * saltate a mano (`skiprows`).
+ */
+function physicsParamsMetadataLines(params: PhysicsParams, opts: { includeScalarWind: boolean }): string[] {
+  const lines = [
+    '# Parametri fisici usati per questo bilancio',
+    `# Peso atleta (kg): ${params.riderMassKg}`,
+    `# Peso attrezzatura (kg): ${params.bikeMassKg}`,
+    `# CdA (m²): ${params.cda}`,
+    `# Crr: ${params.crr}`,
+    `# Densità aria (kg/m³): ${params.airDensity}`
+  ];
+  if (opts.includeScalarWind) {
+    lines.push(`# Vento (km/h, +=in testa): ${params.windKmh}`);
+  }
+  lines.push(`# Perdita drivetrain (%): ${params.drivetrainLossPct}`, '#');
+  return lines;
+}
+
+/**
+ * Come sopra ma per le zone vento direzionali (D72) — quelle che i calcoli sul percorso usano
+ * DAVVERO (vedi commento su `PhysicsParams.windKmh` in shared-schema/physicsParams.ts). Un
+ * confine per riga con il suo valore numerico: mai un'etichetta vaga tipo "vento del piano"
+ * senza i numeri dietro. Nessuna zona/valori mancanti = esplicitamente dichiarato "0 su tutto
+ * il percorso", non lasciato sottinteso.
+ */
+function windZonesMetadataLines(windZones: WindZoneBoundary[] | undefined, label = 'Zone vento del piano'): string[] {
+  if (!windZones || windZones.length === 0) {
+    return [`# ${label}: nessuna zona impostata (vento 0 km/h su tutto il percorso)`, '#'];
+  }
+  const lines = [`# ${label} (${windZones.length} confini):`];
+  [...windZones]
+    .sort((a, b) => a.distKm - b.distKm)
+    .forEach(z => {
+      const wind = z.speedKmh != null && z.directionDeg != null ? `${z.speedKmh} km/h da ${z.directionDeg}°` : 'non impostato (0)';
+      const samples =
+        z.timeSamples.length > 0 ? `, ${z.timeSamples.length} campioni orari ${z.timeSamplesEnabled === false ? 'DISATTIVATI' : 'attivi'}` : '';
+      lines.push(`#   confine a ${z.distKm.toFixed(2)} km: ${wind}${samples}`);
+    });
+  lines.push('#');
+  return lines;
+}
 
 function csvCell(value: string | number): string {
   const s = String(value);
@@ -107,7 +157,7 @@ export function planVsActualSectionsToCsv(rows: PlanVsActualSectionRow[]): strin
  * con transizioni di pendenza (es. l'ipotesi "manca l'inerzia" si verifica guardando se il
  * delta velocità è sistematicamente più alto subito dopo un cambio di pendenza brusco).
  */
-export function planVsActualFineGridToCsv(points: PlanVsActualFinePoint[]): string {
+export function planVsActualFineGridToCsv(points: PlanVsActualFinePoint[], params: PhysicsParams, windZones: WindZoneBoundary[] | undefined): string {
   const header = [
     '#',
     'Da (km)',
@@ -151,7 +201,93 @@ export function planVsActualFineGridToCsv(points: PlanVsActualFinePoint[]): stri
       Number.isFinite(p.maxCorneringSpeedKmh) ? p.maxCorneringSpeedKmh.toFixed(1) : ''
     ];
   });
-  return [header, ...rows].map(row => row.map(csvCell).join(',')).join('\n');
+  return [
+    ...physicsParamsMetadataLines(params, { includeScalarWind: false }),
+    ...windZonesMetadataLines(windZones),
+    header.map(csvCell).join(','),
+    ...rows.map(row => row.map(csvCell).join(','))
+  ].join('\n');
+}
+
+/**
+ * Confronto "con vs senza meteo storico" a livello di MICROSEZIONE (D71) — stesso principio di
+ * `energyBalanceComparisonToCsv` ma sulla griglia fine invece che sul bilancio secondo-per-
+ * secondo: risponde in un colpo solo a due domande che altrimenti richiedono due export
+ * separati e da riallineare a mano: "quanto perdo su curve/frenate" (colonna "Probabile
+ * frenata", raggio curva — invariate rispetto a `planVsActualFineGridToCsv`, non dipendono dal
+ * vento) e "il meteo storico avvicina o allontana il modello dai dati osservati" (le due
+ * colonne "verificata" affiancate, con relativo delta). Le colonne che NON dipendono
+ * dall'ipotesi di vento (pendenza, quota, reale, curva) compaiono una sola volta, non
+ * duplicate — a differenza del bilancio energetico qui il confronto opera su un motore che
+ * usa `windZones` vettoriali (velocità+direzione), non uno scalare unico: il chiamante deve
+ * quindi ricalcolare l'intera griglia due volte con `windZones` diversi (non solo
+ * `params.airDensity`/`windKmh` come per il bilancio energetico) — vedi PlanVsActualView.tsx.
+ */
+export function planVsActualFineGridComparisonToCsv(
+  baseline: PlanVsActualFinePoint[],
+  withWeather: PlanVsActualFinePoint[],
+  baselineAirDensity: number,
+  weatherParams: { airDensity: number; windKmh: number; windDirectionDeg: number },
+  sharedParams: PhysicsParams,
+  baselineWindZones: WindZoneBoundary[] | undefined
+): string {
+  const header = [
+    '#',
+    'Da (km)',
+    'A (km)',
+    'Centro (km)',
+    'Quota (m)',
+    'Pendenza (%)',
+    'Vel. reale (km/h)',
+    'Pot. reale (W)',
+    `Vel. verificata SENZA meteo (km/h, densità ${baselineAirDensity.toFixed(3)} kg/m³, vento del piano)`,
+    'Delta vel. verificata-reale SENZA meteo (km/h)',
+    'Probabile frenata (senza meteo)',
+    `Vel. verificata CON meteo (km/h, densità ${weatherParams.airDensity.toFixed(3)} kg/m³, vento ${weatherParams.windKmh.toFixed(1)} km/h da ${Math.round(weatherParams.windDirectionDeg)}°)`,
+    'Delta vel. verificata-reale CON meteo (km/h)',
+    'Probabile frenata (con meteo)',
+    'Raggio curva stimato (m)',
+    'Vel. max sicurezza in curva (km/h)',
+    'Delta |errore| (km/h, negativo = il meteo migliora)'
+  ];
+  const n = Math.min(baseline.length, withWeather.length);
+  const rows: (string | number)[][] = [];
+  for (let i = 0; i < n; i++) {
+    const b = baseline[i]!;
+    const w = withWeather[i]!;
+    const deltaB = b.actualSpeedKmh != null && b.verifiedSpeedKmh != null ? b.actualSpeedKmh - b.verifiedSpeedKmh : null;
+    const deltaW = w.actualSpeedKmh != null && w.verifiedSpeedKmh != null ? w.actualSpeedKmh - w.verifiedSpeedKmh : null;
+    const brakingB = isLikelyBraking(b, i > 0 ? baseline[i - 1] : null);
+    const brakingW = isLikelyBraking(w, i > 0 ? withWeather[i - 1] : null);
+    const deltaAbsError = deltaB != null && deltaW != null ? Math.round((Math.abs(deltaW) - Math.abs(deltaB)) * 10) / 10 : '';
+    rows.push([
+      i + 1,
+      b.fromKm.toFixed(3),
+      b.toKm.toFixed(3),
+      b.distKm.toFixed(3),
+      Math.round(b.ele),
+      b.gradientPct.toFixed(2),
+      csvNum(b.actualSpeedKmh),
+      csvNum(b.actualPowerWatts, 0),
+      csvNum(b.verifiedSpeedKmh),
+      csvNum(deltaB),
+      brakingB ? 'SI' : '',
+      csvNum(w.verifiedSpeedKmh),
+      csvNum(deltaW),
+      brakingW ? 'SI' : '',
+      Number.isFinite(b.curveRadiusM) ? Math.round(b.curveRadiusM) : '',
+      Number.isFinite(b.maxCorneringSpeedKmh) ? b.maxCorneringSpeedKmh.toFixed(1) : '',
+      deltaAbsError
+    ]);
+  }
+  return [
+    ...physicsParamsMetadataLines({ ...sharedParams, airDensity: baselineAirDensity }, { includeScalarWind: false }),
+    ...windZonesMetadataLines(baselineWindZones, 'Zone vento SENZA meteo (piano)'),
+    `# Vento/densità CON meteo storico: ${weatherParams.airDensity} kg/m³, ${weatherParams.windKmh} km/h da ${weatherParams.windDirectionDeg}° (uniforme su tutto il percorso)`,
+    '#',
+    header.map(csvCell).join(','),
+    ...rows.map(row => row.map(csvCell).join(','))
+  ].join('\n');
 }
 
 /**
@@ -163,7 +299,7 @@ export function planVsActualFineGridToCsv(points: PlanVsActualFinePoint[]): stri
  * NON è spiegato da pedalata+gravità+resistenze note: un residuo negativo forte e
  * concentrato in discesa ripida è quasi certamente frenata (non un errore di modello).
  */
-export function energyBalanceToCsv(rows: EnergyBalanceRow[]): string {
+export function energyBalanceToCsv(rows: EnergyBalanceRow[], params: PhysicsParams): string {
   const header = [
     'Tempo (s)',
     'Distanza (km)',
@@ -192,7 +328,11 @@ export function energyBalanceToCsv(rows: EnergyBalanceRow[]): string {
     Math.round(r.residualJ),
     Math.round(r.residualPowerW)
   ]);
-  return [header, ...dataRows].map(row => row.map(csvCell).join(',')).join('\n');
+  return [
+    ...physicsParamsMetadataLines(params, { includeScalarWind: true }),
+    header.map(csvCell).join(','),
+    ...dataRows.map(row => row.map(csvCell).join(','))
+  ].join('\n');
 }
 
 /**
@@ -208,8 +348,18 @@ export function energyBalanceComparisonToCsv(
   baseline: EnergyBalanceRow[],
   withWeather: EnergyBalanceRow[],
   baselineParams: { airDensity: number; windKmh: number },
-  weatherParams: { airDensity: number; windKmh: number }
+  weatherParams: { airDensity: number; windKmh: number },
+  sharedParams: PhysicsParams
 ): string {
+  const metadata = [
+    '# Parametri fisici condivisi da entrambe le colonne (densità/vento differiscono, vedi intestazione sotto)',
+    `# Peso atleta (kg): ${sharedParams.riderMassKg}`,
+    `# Peso attrezzatura (kg): ${sharedParams.bikeMassKg}`,
+    `# CdA (m²): ${sharedParams.cda}`,
+    `# Crr: ${sharedParams.crr}`,
+    `# Perdita drivetrain (%): ${sharedParams.drivetrainLossPct}`,
+    '#'
+  ];
   const header = [
     'Tempo (s)',
     'Distanza (km)',
@@ -236,7 +386,7 @@ export function energyBalanceComparisonToCsv(
       Math.round(Math.abs(w.residualPowerW) - Math.abs(b.residualPowerW))
     ]);
   }
-  return [header, ...rows].map(row => row.map(csvCell).join(',')).join('\n');
+  return [...metadata, ...[header, ...rows].map(row => row.map(csvCell).join(','))].join('\n');
 }
 
 export function downloadTextFile(filename: string, content: string, mimeType: string): void {

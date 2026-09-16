@@ -42,6 +42,16 @@ interface PacingOptimizerPanelProps {
    * non si esaurisce mai su una gara di durata normale). Joule diretti eliminano l'ambiguità. */
   wPrimeJ: number | '';
   onWPrimeJChange: (v: number | '') => void;
+  /**
+   * Solleva il risultato fine di "Ottimizza completo" al chiamante (D74) — serve al grafico
+   * microsezioni di Tab 3, che altrimenti mostra solo la potenza target COLLASSATA per
+   * sezione (piatta se il piano ha una sola sezione/potenza, o a gradini se ne ha più d'una),
+   * mai la curva fine trovata dall'ottimizzatore. Stato volutamente non persistito (si perde
+   * cambiando percorso o ricaricando) — è un risultato di lavoro, non parte del piano salvato.
+   * `null` quando non c'è un risultato fine valido (mai calcolato, o invalidato da
+   * "Ottimizza sezioni" che lavora su un'altra griglia).
+   */
+  onFinePlanChange?: (finePlan: { segs: FineSegment[]; powers: number[] } | null) => void;
 }
 
 interface FineGridResult {
@@ -62,7 +72,8 @@ export function PacingOptimizerPanel({
   criticalPowerW,
   onCriticalPowerWChange,
   wPrimeJ,
-  onWPrimeJChange
+  onWPrimeJChange,
+  onFinePlanChange
 }: PacingOptimizerPanelProps) {
   const [targetAvg, setTargetAvg] = useState(220);
   const [targetNp, setTargetNp] = useState<number | ''>('');
@@ -102,6 +113,10 @@ export function PacingOptimizerPanel({
       const updates = new Map<string, number>();
       for (let i = 1; i < sorted.length; i++) updates.set(sorted[i]!.id, Math.round(result.powers[i - 1]!));
       onApplyPowers(updates);
+      // Invalida un eventuale risultato fine precedente (D74): non è più rappresentativo di
+      // quello che è stato appena applicato — "Ottimizza sezioni" lavora su una griglia diversa.
+      setFinePlan(null);
+      onFinePlanChange?.(null);
       if (result.fatigueInfeasible) {
         setFatigueWarning(
           `⚠️ Con questo CP/W' la media richiesta (${targetAvg}W) non è sostenibile su questo percorso — nemmeno a potenza costante. Il piano usa la potenza più piatta possibile, ma esaurirà comunque la riserva.`
@@ -134,6 +149,7 @@ export function PacingOptimizerPanel({
       const updates = mapFinePowersToBreakpoints(breakpoints, fineSegs, result.powers);
       onApplyPowers(updates);
       setFinePlan({ segs: fineSegs, powers: result.powers });
+      onFinePlanChange?.({ segs: fineSegs, powers: result.powers });
       if (result.fatigueInfeasible) {
         setFatigueWarning(
           `⚠️ Con questo CP/W' la media richiesta (${targetAvg}W) non è sostenibile su questo percorso — nemmeno a potenza costante. Il piano usa la potenza più piatta possibile, ma esaurirà comunque la riserva.`

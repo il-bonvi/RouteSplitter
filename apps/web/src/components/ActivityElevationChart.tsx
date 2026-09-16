@@ -60,9 +60,6 @@ interface ActivityElevationChartProps {
   plannedPowerLabel?: string;
   /** Stesso principio di plannedPowerLabel, per la velocità. */
   plannedSpeedLabel?: string;
-  /** Distanze (km) delle microsezioni automatiche (griglia fine F3.3), disegnate come tacche
-   * verticali leggere. Vuoto/assente = nessuna tacca (comportamento invariato per F3.1). */
-  microBoundariesKm?: number[];
   /** CP/W' dell'atleta (D48), opzionale — se fornito E lo stream di potenza REALE è presente,
    * disegna una terza curva col bilancio W' residuo calcolato dalla potenza reale (mai da
    * quella pianificata: qui si vuole vedere cosa la fatica ha fatto DAVVERO, non una stima).
@@ -102,7 +99,9 @@ const COLOR_POWER_REAL = '#4338ca';
 const COLOR_POWER_PLANNED = '#7c9cff';
 const COLOR_SPEED_REAL = '#10b981';
 const COLOR_SPEED_PLANNED = '#6ee7b7';
-const COLOR_WBAL = '#34d399';
+// Arancio deliberatamente FUORI dalla famiglia verde/blu di potenza e velocità (D73): era un
+// verde (#34d399) troppo simile a COLOR_SPEED_REAL, difficile da distinguere a colpo d'occhio.
+const COLOR_WBAL = '#f59e0b';
 const TOTAL_W = 900;
 const TOTAL_H = 290;
 const W = TOTAL_W - MARGIN.left - MARGIN.right;
@@ -138,7 +137,6 @@ export function ActivityElevationChart({
   plannedSpeedSeries,
   plannedPowerLabel = 'pianificata',
   plannedSpeedLabel = 'pianificata',
-  microBoundariesKm,
   fatigue
 }: ActivityElevationChartProps) {
   // BUG REALE TROVATO (causa vera dell'hover che sparisce da fermo, mai davvero chiusa nei
@@ -158,7 +156,6 @@ export function ActivityElevationChart({
   const safeWindZones = windZones ?? stableEmptyArrayRef.current;
   const safePlannedPowerSeries = plannedPowerSeries ?? stableEmptyArrayRef.current;
   const safePlannedSpeedSeries = plannedSpeedSeries ?? stableEmptyArrayRef.current;
-  const safeMicroBoundariesKm = microBoundariesKm ?? stableEmptyArrayRef.current;
   const containerRef = useRef<HTMLDivElement>(null);
   const [zoomDomain, setZoomDomain] = useState<[number, number] | null>(null);
   const [selectionStats, setSelectionStats] = useState<SelectionStats | null>(null);
@@ -410,26 +407,6 @@ export function ActivityElevationChart({
 
     g.selectAll('.domain').style('stroke', '#d1d5db');
 
-    if (safeMicroBoundariesKm.length > 0) {
-      // Tacche sottili non interattive alle distanze delle microsezioni (griglia automatica
-      // F3.3) — deliberatamente senza numeri/cerchi come i breakpoint veri (potrebbero
-      // essere centinaia): solo un riferimento visivo di dove cade ogni bin.
-      g.append('g')
-        .attr('class', 'micro-boundaries')
-        .attr('pointer-events', 'none')
-        .selectAll('line')
-        .data(safeMicroBoundariesKm.filter(km => km >= d0 && km <= d1))
-        .join('line')
-        .attr('x1', km => xScale(km))
-        .attr('x2', km => xScale(km))
-        .attr('y1', 0)
-        .attr('y2', H)
-        .attr('stroke', '#a78bfa')
-        .attr('stroke-width', 1)
-        .attr('stroke-dasharray', '2,3')
-        .attr('opacity', 0.55);
-    }
-
     if (safeWindZones.length >= 2 && windMaxAbs > 0) {
       const bandH = 7;
       const bandY = -bandH - 5;
@@ -508,7 +485,7 @@ export function ActivityElevationChart({
         .attr('clip-path', 'url(#activity-elev-clip)')
         .attr('fill', 'none')
         .attr('stroke', COLOR_WBAL)
-        .attr('stroke-width', 2)
+        .attr('stroke-width', 1.2)
         .attr('pointer-events', 'none')
         .attr('d', wbalLine);
     }
@@ -645,6 +622,23 @@ export function ActivityElevationChart({
       .attr('pointer-events', 'none');
 
     const bisectDist = d3.bisector<ChartDatum, number>(d => d.dist).left;
+    const bisectPlannedPower = d3.bisector<{ distKm: number; powerWatts: number }, number>(d => d.distKm).left;
+    const bisectPlannedSpeed = d3.bisector<{ distKm: number; speedKmh: number }, number>(d => d.distKm).left;
+
+    // Interpolazione lineare fra i due punti della serie pianificata/verificata più vicini a
+    // `dist` — coerente con la curva disegnata (`curveMonotoneX` la smussa ulteriormente per la
+    // resa visiva, ma linear-fra-vicini resta la lettura onesta del dato per il tooltip, senza
+    // introdurre un secondo tipo di interpolazione solo per il testo).
+    function interpAtDist<T>(series: T[], dist: number, bisect: (arr: T[], x: number) => number, getX: (d: T) => number, getY: (d: T) => number): number | null {
+      if (series.length === 0) return null;
+      const idx = bisect(series, dist);
+      const a = series[Math.max(0, idx - 1)];
+      const b = series[Math.min(series.length - 1, idx)];
+      if (!a || !b) return null;
+      if (a === b || getX(b) === getX(a)) return getY(a);
+      const t = (dist - getX(a)) / (getX(b) - getX(a));
+      return getY(a) + t * (getY(b) - getY(a));
+    }
 
     function updateHover(clientX: number, clientY: number, svgX: number) {
       // Vedi commento nella stessa funzione in ElevationChart.tsx: clampato a [d0,d1] per
@@ -665,12 +659,26 @@ export function ActivityElevationChart({
       const sign = point.gradient > 0.05 ? '+' : '';
       const powerPart = point.powerW != null ? ` &nbsp;·&nbsp; ${Math.round(point.powerW)} W` : '';
       const speedPart = point.speedKmh != null ? ` &nbsp;·&nbsp; ${point.speedKmh.toFixed(1)} km/h` : '';
-      const wbalPart = point.wbalJ != null && showWBal ? ` &nbsp;·&nbsp; W'bal ${(point.wbalJ / 1000).toFixed(1)} kJ` : '';
+      const plannedPowerVal =
+        hasPlannedPower && showPowerPlanned ? interpAtDist(safePlannedPowerSeries, point.dist, bisectPlannedPower, d => d.distKm, d => d.powerWatts) : null;
+      const plannedSpeedVal =
+        hasPlannedSpeed && showSpeedPlanned ? interpAtDist(safePlannedSpeedSeries, point.dist, bisectPlannedSpeed, d => d.distKm, d => d.speedKmh) : null;
+      const plannedPowerPart =
+        plannedPowerVal != null
+          ? ` &nbsp;·&nbsp; <span style="color:${COLOR_POWER_PLANNED}">${Math.round(plannedPowerVal)} W ${plannedPowerLabel}</span>`
+          : '';
+      const plannedSpeedPart =
+        plannedSpeedVal != null
+          ? ` &nbsp;·&nbsp; <span style="color:${COLOR_SPEED_PLANNED}">${plannedSpeedVal.toFixed(1)} km/h ${plannedSpeedLabel}</span>`
+          : '';
+      const wbalPart = point.wbalJ != null && showWBal ? ` &nbsp;·&nbsp; <span style="color:${COLOR_WBAL}">W'bal ${(point.wbalJ / 1000).toFixed(1)} kJ</span>` : '';
       tooltip!.innerHTML =
         `↑ <b>${point.ele.toFixed(0)} m</b> &nbsp;·&nbsp; ${point.dist.toFixed(2)} km` +
         `<span style="display:inline-block;padding:1px 6px;border-radius:3px;background:${color};color:#fff;font-size:11px;font-weight:700;margin-left:6px;">${sign}${point.gradient.toFixed(1)}%</span>` +
         powerPart +
+        plannedPowerPart +
         speedPart +
+        plannedSpeedPart +
         wbalPart;
       tooltip!.style.display = 'block';
       let tx = clientX + 16;
@@ -764,11 +772,12 @@ export function ActivityElevationChart({
     hasSpeed,
     safePlannedPowerSeries,
     safePlannedSpeedSeries,
+    plannedPowerLabel,
+    plannedSpeedLabel,
     showPowerReal,
     showPowerPlanned,
     showSpeedReal,
     showSpeedPlanned,
-    safeMicroBoundariesKm,
     hasWBal,
     showWBal,
     fatigue
