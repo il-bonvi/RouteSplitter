@@ -14,6 +14,7 @@ import {
   type DynamicSimStep
 } from '../../src/physics-core/dynamicSimulation.js';
 import { speedFromPower, processRoute, computeSections, makeUniformWindZones, type PhysicsParams, type SectionBreakpoint } from '../../src/physics-core/index.js';
+import { buildFineGrid } from '../../src/lib/pacingActions.js';
 
 const params: PhysicsParams = {
   riderMassKg: 70,
@@ -477,6 +478,58 @@ describe('optimizePacingDynamic (rimpiazza l\'ottimizzatore classico "per micros
     expect(Math.abs(result.timeWeightedAvgPower - target)).toBeLessThan(3);
     expect(result.normalizedPower).toBeLessThan(npCeiling + 5);
   });
+
+  it(
+    "BUG REGRESSION (D75): su un percorso QUASI PIATTO a griglia molto fine (~260 tratti da 50m, come \"Ottimizza completo\" su un piano reale), la potenza allocata non deve avere una varianza alta senza un vero vantaggio in tempo — prima della correzione la soglia di accettazione del trasferimento (1e-7 ore ≈ 0.00036s) era indistinguibile dal rumore numerico della simulazione discretizzata al secondo, e l'hill-climbing accumulava trasferimenti a caso in una forma a zig-zag che non comprava alcun tempo reale (segnalato dall'utente: dati verificati con la stessa allocazione = stesso tempo, nessun guadagno)",
+    () => {
+      // Pendenza minima (±0.5%, sotto la soglia con cui il codice stesso giustifica un'alta
+      // varianza — "un percorso con salite/discese MARCATE", non un ondulato leggero come
+      // questo) — quasi tutto il potenziale di guadagno da una potenza non uniforme qui è
+      // rumore, non fisica reale.
+      const totalKm = 13;
+      const points = processRoute(
+        Array.from({ length: 1300 }, (_, i) => {
+          const km = (i / 1299) * totalKm;
+          // Leggerissimo saliscendi, mai oltre ±0.15% istantaneo: onda lenta, non un vero terreno mosso.
+          const ele = 10 + 3 * Math.sin((km / totalKm) * Math.PI * 2);
+          return { lat: 45.0 + km / 111, lon: 11.0, ele };
+        })
+      ).points;
+      const fineBoundaries = buildFineGrid(totalKm, 0.05, points);
+      const result = optimizePacingDynamic(fineBoundaries, points, params, {
+        targetAvgPower: 230,
+        minPower: 100,
+        maxPower: 400
+      });
+      const min = Math.min(...result.powers);
+      const max = Math.max(...result.powers);
+      // Prima della correzione (D75) questo spread arrivava a >80W su un caso reale analogo
+      // (percorso di Lugo, segnalato dall'utente) senza alcun beneficio in tempo verificabile.
+      // Col tie-break "preferisci il più piatto a parità di tempo" (D76) lo spread crolla a
+      // pochi watt (o zero) — non serve più solo il deadband sul seed a tenerlo basso.
+      expect(max - min).toBeLessThan(15);
+    }
+  );
+
+  it(
+    'il tie-break "preferisci il più piatto" (D76) non appiattisce una salita VERA: su hillyRoute() (salita di 3km al 6%), la ' +
+      'potenza sulla salita resta nettamente più alta che sul resto — la varianza qui è fisica, non rumore, e il tie-break si ' +
+      'attiva solo a parità di tempo, mai quando c\'è un vantaggio vero da preservare',
+    () => {
+      const points = hillyRoute();
+      const fineBoundaries = buildFineGrid(10, 0.1, points);
+      const result = optimizePacingDynamic(fineBoundaries, points, params, {
+        targetAvgPower: 220,
+        minPower: 80,
+        maxPower: 450
+      });
+      const climbPowers = result.powers.filter((_, i) => fineBoundaries[i]!.d0Km >= 3 && fineBoundaries[i]!.d1Km <= 6);
+      const restPowers = result.powers.filter((_, i) => fineBoundaries[i]!.d1Km <= 3 || fineBoundaries[i]!.d0Km >= 6);
+      const avgClimb = climbPowers.reduce((a, p) => a + p, 0) / climbPowers.length;
+      const avgRest = restPowers.reduce((a, p) => a + p, 0) / restPowers.length;
+      expect(avgClimb).toBeGreaterThan(avgRest + 30);
+    }
+  );
 
   it('con un array di tratti vuoto non crasha', () => {
     const points = hillyRoute();

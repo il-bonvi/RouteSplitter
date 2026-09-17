@@ -211,6 +211,39 @@ export function totalDynamicSimTimeHours(steps: DynamicSimStep[], dtSec = 1): nu
   return steps.length === 0 ? 0 : (steps.length * dtSec) / 3600;
 }
 
+/**
+ * Soglia minima di miglioramento per accettare un trasferimento di potenza fra due tratti
+ * nella rifinitura a hill-climbing (D75). Prima era `1e-7` (ore = 0.00036 secondi, o
+ * l'equivalente in "costo" della seconda fase con vincolo NP) — praticamente zero, quindi
+ * indistinguibile dal rumore numerico della simulazione dinamica discretizzata al secondo.
+ * Su un percorso quasi pianeggiante (varianza di pendenza minima, poco da guadagnare
+ * spostando potenza) l'hill-climbing accettava trasferimenti che non compravano alcun tempo
+ * reale, accumulandoli senza mai disfarli (è una salita, non un annealing) — risultato: piani
+ * con potenza a zig-zag fra tratti adiacenti (specialmente quelli corti, che nella media
+ * pesata sulla distanza mostrano il rumore più amplificato) che non producono alcun guadagno
+ * quando riverificati con la potenza reale. Da 0.5s: abbastanza per filtrare il rumore di un
+ * passo di simulazione da 1s, abbastanza piccola da non bloccare un guadagno vero (una salita
+ * vera, anche breve, produce un beneficio ben sopra questa soglia).
+ */
+const MIN_TIME_IMPROVEMENT_S = 0.5;
+
+/**
+ * Varianza della potenza pesata sulla distanza (W²), attorno alla propria media pesata — non
+ * rispetto a un target esterno, self-contained. Usata come spareggio (D76): quando due
+ * allocazioni sono legate per tempo (differenza sotto `MIN_TIME_IMPROVEMENT_S`), preferire
+ * quella più piatta invece di lasciare che l'esito dipenda da quale coppia di tratti la
+ * ricerca casuale ha scelto per prima. Non serve una soglia di "differenza minima" qui come
+ * per il tempo: a differenza della simulazione dinamica (discretizzata, con rumore numerico),
+ * questo è un calcolo aritmetico esatto sugli stessi identici numeri in watt — un confronto
+ * diretto (`<`) è già corretto.
+ */
+function weightedPowerVariance(powers: number[], distances: number[]): number {
+  const totalDist = distances.reduce((a, d) => a + d, 0);
+  if (totalDist <= 0) return 0;
+  const mean = powers.reduce((acc, p, i) => acc + p * distances[i]!, 0) / totalDist;
+  return powers.reduce((acc, p, i) => acc + distances[i]! * (p - mean) ** 2, 0) / totalDist;
+}
+
 /** Piccolo PRNG deterministico (mulberry32) — usato per rendere il raffinamento dinamico
  * riproducibile nei test con un seed fisso, invece di dipendere da `Math.random()`. */
 function mulberry32(seed: number): () => number {
@@ -294,6 +327,8 @@ export function refinePacingWithDynamicSimulation(
   const startingTimeHours = totalTimeFor(powers);
   let best = startingTimeHours;
   let trialsAccepted = 0;
+  const distances = distancesOf(boundaries);
+  const improvementBandHours = MIN_TIME_IMPROVEMENT_S / 3600;
 
   if (n < 2) return { powers, totalTimeHours: best, startingTimeHours, trialsAccepted: 0 };
 
@@ -314,9 +349,22 @@ export function refinePacingWithDynamicSimulation(
     candidate[j]! += step;
 
     const t = totalTimeFor(candidate);
-    if (t < best - 1e-7) {
+    if (t < best - improvementBandHours) {
       powers = candidate;
       best = t;
+      trialsAccepted++;
+    } else if (
+      // D76: spareggio a parità di tempo (dentro la banda di rumore della simulazione) —
+      // preferisce l'allocazione più piatta invece di lasciare che l'esito dipenda da quale
+      // coppia casuale la ricerca ha incontrato per prima. `best` resta un pavimento
+      // monotono (non peggiora mai): un'accettazione qui può solo abbassarlo o lasciarlo
+      // invariato, mai alzarlo — altrimenti accettazioni ripetute "quasi pari" potrebbero
+      // accumulare una deriva verso un tempo via via peggiore.
+      t <= best + improvementBandHours &&
+      weightedPowerVariance(candidate, distances) < weightedPowerVariance(powers, distances)
+    ) {
+      powers = candidate;
+      best = Math.min(best, t);
       trialsAccepted++;
     }
   }
@@ -544,7 +592,26 @@ function clampPreservingWeightedMean(
  * (pesata sul tempo simulato, non sulla distanza — vedi `rescalePowersToTargetAvg`, applicata
  * subito dopo in `optimizePacingDynamic`) né ottimizzato: ci pensa
  * `refinePacingWithDynamicSimulation`, con la simulazione vera come costo.
+ *
+ * BUG REGRESSION (D75): senza `GRADIENT_DEADBAND_PCT`, il peso è lineare nella pendenza SENZA
+ * alcuna soglia minima — su un percorso quasi piatto (crono di Lugo, segnalata dall'utente:
+ * "watt estremamente bassi nella prima metà, estremamente alti nella seconda... troppo salto
+ * fra una microsezione e l'altra") una pendenza reale di appena ±0.15% (rumore di quota
+ * GPS/barometrico più che un vero saliscendi) produceva GIÀ nel seed da sola — prima ancora di
+ * qualunque raffinamento — uno spread di ~200W (130-330W) a fronte di un target di 230W.
+ * `refinePacingWithDynamicSimulation` non lo corregge: su un percorso davvero piatto,
+ * "appiattire" il seed non compra un tempo vero misurabile (stesso motivo per cui l'utente
+ * osservava tempo identico coi dati verificati), quindi la soglia di miglioramento minimo
+ * (v. `MIN_TIME_IMPROVEMENT_S`) non accetta la correzione — il seed sbagliato resta quasi
+ * inalterato fino in fondo. La vera giustificazione per un'alta varianza, come già documentato
+ * sopra in questo file, è "salite/discese MARCATE" — non rumore di quota sotto l'1%. Sotto la
+ * soglia il peso resta 1 (potenza uniforme, come dovrebbe essere su un piatto vero); oltre,
+ * la sensibilità si applica solo all'eccedenza, preservando il comportamento già validato dai
+ * test D45/D46 su pendenze marcate (6%), dove l'eccedenza (6 - 0.5 = 5.5%) è quasi identica
+ * alla pendenza grezza.
  */
+const GRADIENT_DEADBAND_PCT = 0.5;
+
 function buildGradientWeightedSeed(
   boundaries: { d0Km: number; d1Km: number; gradient: number }[],
   targetAvgPower: number,
@@ -555,7 +622,11 @@ function buildGradientWeightedSeed(
   const n = boundaries.length;
   if (n === 0) return [];
   const distances = distancesOf(boundaries);
-  const weights = boundaries.map(b => Math.max(0.25, 1 + slopeSensitivity * b.gradient));
+  const weights = boundaries.map(b => {
+    const g = b.gradient;
+    const excess = Math.sign(g) * Math.max(0, Math.abs(g) - GRADIENT_DEADBAND_PCT);
+    return Math.max(0.25, 1 + slopeSensitivity * excess);
+  });
   const totalDist = distances.reduce((a, d) => a + d, 0);
   const weightedMean = weights.reduce((a, w, i) => a + w * distances[i]!, 0) / totalDist;
   const initialPowers = weights.map(w => (targetAvgPower * w) / weightedMean);
@@ -937,6 +1008,7 @@ export function optimizePacingDynamic(
   const numPhases = 3;
   const trialsPerPhase = Math.max(1, Math.ceil(maxTrials / numPhases));
   let bestCost = costOf(current.timeHours, current.np);
+  const npDistances = distancesOf(plainBoundaries);
 
   for (let phase = 0; phase < numPhases; phase++) {
     for (let t = 0; t < trialsPerPhase; t++) {
@@ -964,9 +1036,19 @@ export function optimizePacingDynamic(
       candidate[j]! += step;
       const evalC = evalFor(candidate);
       const cost = costOf(evalC.timeHours, evalC.np);
-      if (cost < bestCost - 1e-7) {
+      if (cost < bestCost - MIN_TIME_IMPROVEMENT_S) {
         powers = candidate;
         bestCost = cost;
+        current = evalC;
+      } else if (
+        // D76: stesso spareggio di refinePacingWithDynamicSimulation — a parità di costo
+        // (tempo+penalità NP), preferisce l'allocazione più piatta. Appiattire riduce anche la
+        // varianza che alimenta l'NP stessa, quindi non va mai contro l'obiettivo del limite.
+        cost <= bestCost + MIN_TIME_IMPROVEMENT_S &&
+        weightedPowerVariance(candidate, npDistances) < weightedPowerVariance(powers, npDistances)
+      ) {
+        powers = candidate;
+        bestCost = Math.min(bestCost, cost);
         current = evalC;
       }
     }
