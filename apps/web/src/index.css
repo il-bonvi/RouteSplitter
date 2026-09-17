@@ -382,6 +382,32 @@ body {
 .physics-field input:focus {
   border-color: var(--accent);
 }
+/* Slider split (D77) — dentro un .physics-field, quindi eredita lo stile "field" (etichetta
+   maiuscoletto monospace) ma l'input range va resettato: le regole di .physics-field input
+   sopra sono pensate per campi di testo (sfondo, bordo, padding), non per uno slider nativo. */
+.pacing-split-field {
+  max-width: 420px;
+}
+.pacing-split-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pacing-split-row input[type='range'] {
+  flex: 1;
+  background: transparent;
+  border: none;
+  padding: 0;
+  accent-color: var(--accent);
+}
+.pacing-split-end {
+  font-size: 0.62rem;
+  color: var(--text-muted);
+  text-transform: none;
+  letter-spacing: normal;
+  white-space: nowrap;
+}
+
 .physics-checkbox-field {
   display: flex;
   align-items: center;

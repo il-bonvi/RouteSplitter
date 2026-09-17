@@ -237,11 +237,23 @@ const MIN_TIME_IMPROVEMENT_S = 0.5;
  * questo è un calcolo aritmetico esatto sugli stessi identici numeri in watt — un confronto
  * diretto (`<`) è già corretto.
  */
-function weightedPowerVariance(powers: number[], distances: number[]): number {
+/**
+ * Distanza pesata sulla distanza fra un'allocazione candidata e un RIFERIMENTO (D76/D77) — non
+ * la varianza rispetto alla propria media. Usata come spareggio: quando due allocazioni sono
+ * legate per tempo (differenza sotto `MIN_TIME_IMPROVEMENT_S`), preferire quella più VICINA AL
+ * RIFERIMENTO invece di lasciare che l'esito dipenda da quale coppia di tratti la ricerca
+ * casuale ha scelto per prima. Il riferimento è il seed di partenza (geometria + eventuale
+ * split, mai il raffinamento stesso) — così lo spareggio non tira mai verso "più piatto in
+ * assoluto" ma verso "il punto di partenza scelto", che è piatto SOLO quando pendenza e split
+ * non dicono altrimenti (D75: deadband; D77: rampa di split esplicita). Nessuna soglia di
+ * "differenza minima" qui come per il tempo: a differenza della simulazione dinamica
+ * (discretizzata, con rumore numerico), questo è un calcolo aritmetico esatto sugli stessi
+ * identici numeri in watt — un confronto diretto (`<`) è già corretto.
+ */
+function weightedDistanceFromReference(powers: number[], reference: number[], distances: number[]): number {
   const totalDist = distances.reduce((a, d) => a + d, 0);
   if (totalDist <= 0) return 0;
-  const mean = powers.reduce((acc, p, i) => acc + p * distances[i]!, 0) / totalDist;
-  return powers.reduce((acc, p, i) => acc + distances[i]! * (p - mean) ** 2, 0) / totalDist;
+  return powers.reduce((acc, p, i) => acc + distances[i]! * (p - reference[i]!) ** 2, 0) / totalDist;
 }
 
 /** Piccolo PRNG deterministico (mulberry32) — usato per rendere il raffinamento dinamico
@@ -324,6 +336,7 @@ export function refinePacingWithDynamicSimulation(
   };
 
   let powers = initialPowers.slice();
+  const referenceShape = initialPowers.slice();
   const startingTimeHours = totalTimeFor(powers);
   let best = startingTimeHours;
   let trialsAccepted = 0;
@@ -361,7 +374,7 @@ export function refinePacingWithDynamicSimulation(
       // invariato, mai alzarlo — altrimenti accettazioni ripetute "quasi pari" potrebbero
       // accumulare una deriva verso un tempo via via peggiore.
       t <= best + improvementBandHours &&
-      weightedPowerVariance(candidate, distances) < weightedPowerVariance(powers, distances)
+      weightedDistanceFromReference(candidate, referenceShape, distances) < weightedDistanceFromReference(powers, referenceShape, distances)
     ) {
       powers = candidate;
       best = Math.min(best, t);
@@ -612,6 +625,29 @@ function clampPreservingWeightedMean(
  */
 const GRADIENT_DEADBAND_PCT = 0.5;
 
+/**
+ * Applica una rampa lineare di split (D77) al seed, PRIMA della normalizzazione sulla media —
+ * moltiplica ogni tratto per un fattore che va da `1 - splitPct/100` all'inizio del percorso a
+ * `1 + splitPct/100` alla fine, lineare in mezzo (frazione di DISTANZA, non di tempo/tratti:
+ * un percorso con tratti di lunghezza diversa ha comunque una rampa fisicamente lineare sul
+ * terreno). La normalizzazione successiva (`rescalePowersToTargetAvg`) ricentra la media, quindi
+ * qui non serve preoccuparsene. `splitPct = 0` è un no-op esatto (moltiplica tutto per 1).
+ */
+function applyLinearSplit(powers: number[], boundaries: { d0Km: number; d1Km: number }[], splitPct: number): number[] {
+  if (!splitPct) return powers;
+  const k = Math.max(-40, Math.min(40, splitPct)) / 100;
+  const dMin = Math.min(...boundaries.map(b => b.d0Km));
+  const dMax = Math.max(...boundaries.map(b => b.d1Km));
+  const span = dMax - dMin;
+  if (span <= 0) return powers;
+  return powers.map((p, i) => {
+    const mid = (boundaries[i]!.d0Km + boundaries[i]!.d1Km) / 2;
+    const frac = (mid - dMin) / span; // 0 all'inizio, 1 alla fine
+    const factor = 1 + k * (2 * frac - 1);
+    return p * factor;
+  });
+}
+
 function buildGradientWeightedSeed(
   boundaries: { d0Km: number; d1Km: number; gradient: number }[],
   targetAvgPower: number,
@@ -728,6 +764,19 @@ export interface DynamicOptimizerOptions {
    */
   trialsPerSegment?: number;
   seed?: number;
+  /**
+   * Split lineare (D77): rampa di potenza da inizio a fine percorso, PRIMA di qualunque
+   * raffinamento — non un vincolo, solo un punto di partenza diverso che il raffinamento poi
+   * tratta come qualunque altro seed (vedi `weightedDistanceFromReference`: lo spareggio a
+   * parità di tempo tira verso QUESTO seed, non verso il piatto in assoluto, quindi uno split
+   * richiesto esplicitamente non viene "corretto via" dalla preferenza per la costanza).
+   * Percento con segno: positivo = negative split (si parte più piano, si finisce più forte —
+   * strategia da corsa classica); negativo = positive split (il contrario). Es. 10 → si parte
+   * al 90% della potenza media, si finisce al 110%, rampa lineare in mezzo. 0 (default) =
+   * nessuna rampa, comportamento identico a prima di D77. Range gestito lato UI; qui solo
+   * clampato difensivamente a ±40 (oltre non ha senso pratico per un piano da seguire).
+   */
+  splitPct?: number;
 }
 
 export interface DynamicOptimizerResult {
@@ -806,7 +855,8 @@ export function optimizePacingDynamic(
 
   const rawSeed = buildGradientWeightedSeed(boundaries, targetAvgPower, minPower, maxPower, 3);
   const plainBoundaries = boundaries.map(b => ({ d0Km: b.d0Km, d1Km: b.d1Km }));
-  const seed = rescalePowersToTargetAvg(rawSeed, plainBoundaries, routePoints, params, simOpts, targetAvgPower, minPower, maxPower);
+  const splitSeed = applyLinearSplit(rawSeed, plainBoundaries, options.splitPct ?? 0);
+  const seed = rescalePowersToTargetAvg(splitSeed, plainBoundaries, routePoints, params, simOpts, targetAvgPower, minPower, maxPower);
   const hasNpTarget = !!targetNormalizedPower && targetNormalizedPower > 50;
 
   let powers: number[];
@@ -1009,6 +1059,7 @@ export function optimizePacingDynamic(
   const trialsPerPhase = Math.max(1, Math.ceil(maxTrials / numPhases));
   let bestCost = costOf(current.timeHours, current.np);
   const npDistances = distancesOf(plainBoundaries);
+  const npReferenceShape = powers.slice();
 
   for (let phase = 0; phase < numPhases; phase++) {
     for (let t = 0; t < trialsPerPhase; t++) {
@@ -1045,7 +1096,7 @@ export function optimizePacingDynamic(
         // (tempo+penalità NP), preferisce l'allocazione più piatta. Appiattire riduce anche la
         // varianza che alimenta l'NP stessa, quindi non va mai contro l'obiettivo del limite.
         cost <= bestCost + MIN_TIME_IMPROVEMENT_S &&
-        weightedPowerVariance(candidate, npDistances) < weightedPowerVariance(powers, npDistances)
+        weightedDistanceFromReference(candidate, npReferenceShape, npDistances) < weightedDistanceFromReference(powers, npReferenceShape, npDistances)
       ) {
         powers = candidate;
         bestCost = Math.min(bestCost, cost);

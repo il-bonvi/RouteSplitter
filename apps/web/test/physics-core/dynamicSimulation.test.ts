@@ -531,6 +531,45 @@ describe('optimizePacingDynamic (rimpiazza l\'ottimizzatore classico "per micros
     }
   );
 
+  it(
+    'splitPct (D77): su un percorso piatto, uno split positivo (negative split) produce una potenza crescente da inizio a ' +
+      'fine — e non viene "corretto via" dal tie-break D76, perché il tie-break tira verso il seed (che include lo split), non ' +
+      'verso il piatto in assoluto',
+    () => {
+      const points = flatRoute(13);
+      const fineBoundaries = buildFineGrid(13, 0.05, points);
+      const result = optimizePacingDynamic(
+        fineBoundaries,
+        points,
+        params,
+        { targetAvgPower: 230, minPower: 100, maxPower: 400 },
+        { splitPct: 10 }
+      );
+      const firstQuarter = result.powers.slice(0, Math.floor(result.powers.length / 4));
+      const lastQuarter = result.powers.slice(-Math.floor(result.powers.length / 4));
+      const avgFirst = firstQuarter.reduce((a, p) => a + p, 0) / firstQuarter.length;
+      const avgLast = lastQuarter.reduce((a, p) => a + p, 0) / lastQuarter.length;
+      // Split 10% ⇒ ~20 punti percentuali di differenza attesa fra i due estremi (90%→110% del
+      // target) — margine ampio per non essere fragile ai dettagli del raffinamento.
+      expect(avgLast - avgFirst).toBeGreaterThan(30);
+      expect(Math.abs(result.timeWeightedAvgPower - 230)).toBeLessThan(5);
+    }
+  );
+
+  it('splitPct = 0 (default) non cambia nulla rispetto a prima di D77', () => {
+    const points = flatRoute(13);
+    const fineBoundaries = buildFineGrid(13, 0.05, points);
+    const withoutOption = optimizePacingDynamic(fineBoundaries, points, params, { targetAvgPower: 230, minPower: 100, maxPower: 400 });
+    const withZero = optimizePacingDynamic(
+      fineBoundaries,
+      points,
+      params,
+      { targetAvgPower: 230, minPower: 100, maxPower: 400 },
+      { splitPct: 0 }
+    );
+    expect(withZero.powers).toEqual(withoutOption.powers);
+  });
+
   it('con un array di tratti vuoto non crasha', () => {
     const points = hillyRoute();
     const result = optimizePacingDynamic([], points, params, { targetAvgPower: 220, minPower: 100, maxPower: 400 });

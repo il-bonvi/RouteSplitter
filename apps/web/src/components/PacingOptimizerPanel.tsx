@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { optimizePacingDynamic, type ProcessedPoint, type SectionBreakpoint, type PhysicsParams, type FatigueParams } from '@physics-core';
 import type { WindZoneBoundary } from '@shared-schema';
 import { breakpointsToSegments, buildFineGrid, mapFinePowersToBreakpoints, type FineSegment } from '../lib/pacingActions.js';
@@ -79,6 +79,26 @@ export function PacingOptimizerPanel({
   const [targetNp, setTargetNp] = useState<number | ''>('');
   const [minPower, setMinPower] = useState(100);
   const [maxPower, setMaxPower] = useState(400);
+  // D77: split lineare (negative/positive), gestito interamente lato utente ("lascia a me la
+  // taratura" — nessun default diverso da 0, nessuna logica che lo suggerisca). Stato locale
+  // non persistito, stesso trattamento di targetAvg/minPower/maxPower.
+  const [splitPct, setSplitPct] = useState(0);
+  // La rotella sullo slider deve muovere SOLO lo split, non anche scrollare la pagina — ma
+  // React registra `onWheel` come listener PASSIVO di default (per non bloccare lo scroll
+  // globale), quindi `event.preventDefault()` dentro un handler React `onWheel` viene
+  // silenziosamente ignorato dal browser. L'unico modo è un listener nativo non-passivo
+  // (`{ passive: false }`), che React non offre come prop — va attaccato a mano.
+  const splitWheelRef = useRef<HTMLLabelElement>(null);
+  useEffect(() => {
+    const el = splitWheelRef.current;
+    if (!el) return;
+    const onWheelNative = (e: WheelEvent) => {
+      e.preventDefault();
+      setSplitPct(v => Math.max(-20, Math.min(20, v + (e.deltaY < 0 ? 1 : -1))));
+    };
+    el.addEventListener('wheel', onWheelNative, { passive: false });
+    return () => el.removeEventListener('wheel', onWheelNative);
+  }, []);
   const [resultText, setResultText] = useState<string | null>(null);
   const [fatigueWarning, setFatigueWarning] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -108,7 +128,7 @@ export function PacingOptimizerPanel({
         processedPoints,
         physicsParams,
         { targetAvgPower: targetAvg, targetNormalizedPower: targetNp === '' ? null : targetNp, minPower, maxPower, fatigue },
-        { windZones, plannedStartMinuteOfDay, gradientSmoothingM: smoothingWindowMeters }
+        { windZones, plannedStartMinuteOfDay, gradientSmoothingM: smoothingWindowMeters, splitPct }
       );
       const updates = new Map<string, number>();
       for (let i = 1; i < sorted.length; i++) updates.set(sorted[i]!.id, Math.round(result.powers[i - 1]!));
@@ -144,7 +164,7 @@ export function PacingOptimizerPanel({
         processedPoints,
         physicsParams,
         { targetAvgPower: targetAvg, targetNormalizedPower: targetNp === '' ? null : targetNp, minPower, maxPower, fatigue },
-        { windZones, plannedStartMinuteOfDay, gradientSmoothingM: smoothingWindowMeters }
+        { windZones, plannedStartMinuteOfDay, gradientSmoothingM: smoothingWindowMeters, splitPct }
       );
       const updates = mapFinePowersToBreakpoints(breakpoints, fineSegs, result.powers);
       onApplyPowers(updates);
@@ -250,6 +270,28 @@ export function PacingOptimizerPanel({
           />
         </label>
       </div>
+      <label
+        className="physics-field pacing-split-field"
+        title="Negativs vs Positive split: 0 = costante, + = più piano all'inizio e più forte alla fine, - = più forte all'inizio e più piano alla fine."
+        ref={splitWheelRef}
+      >
+        <span>
+          Split:{' '}
+          {splitPct === 0 ? 'costante' : splitPct > 0 ? `negative split +${splitPct}%` : `positive split ${splitPct}%`}
+        </span>
+        <div className="pacing-split-row">
+          <span className="pacing-split-end">più piano</span>
+          <input
+            type="range"
+            min={-20}
+            max={20}
+            step={1}
+            value={splitPct}
+            onChange={e => setSplitPct(Number(e.target.value))}
+          />
+          <span className="pacing-split-end">più forte</span>
+        </div>
+      </label>
       <div className="pacing-actions">
         <button type="button" disabled={busy} onClick={runOnSections}>
           Ottimizza sezioni
