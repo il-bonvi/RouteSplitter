@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { haversine, processRoute, getInterpolatedPoint, computeGainLossBetween, distanceWeightedMeanBearingDeg } from '../../src/physics-core/geo.js';
+import { haversine, processRoute, getInterpolatedPoint, computeGainLossBetween, distanceWeightedMeanBearingDeg, cropRoutePoints } from '../../src/physics-core/geo.js';
 
 describe('haversine', () => {
   it('distanza nulla tra due punti identici', () => {
@@ -100,5 +100,54 @@ describe('distanceWeightedMeanBearingDeg', () => {
 
   it('null se tutti i punti coincidono (nessun segmento con distanza > 0)', () => {
     expect(distanceWeightedMeanBearingDeg([{ lat: 45, lon: 11 }, { lat: 45, lon: 11 }])).toBeNull();
+  });
+});
+
+describe('cropRoutePoints', () => {
+  // Punto lungo un meridiano (lon fissa): con lat = distM/metersPerDegree usando lo STESSO
+  // raggio terrestre di `haversine` (6 371 000 m, non i 111 320 m/grado dell'ellissoide
+  // WGS84 usati altrove nei test con tolleranze larghe), la distanza haversine ricalcolata
+  // da `processRoute` coincide con distM a meno di rumore in virgola mobile — necessario
+  // qui perché verifichiamo l'interpolazione dell'elevazione a pochi millimetri.
+  const METERS_PER_DEGREE = (Math.PI / 180) * 6371000;
+  function routePoint(distM: number, ele: number) {
+    return { lat: distM / METERS_PER_DEGREE, lon: 11, ele };
+  }
+
+  it('ritaglia al km esatto, interpolando gli estremi (non tronca al punto GPX più vicino)', () => {
+    const raw = [routePoint(0, 100), routePoint(1000, 150), routePoint(2000, 100), routePoint(3000, 200)];
+    const processed = processRoute(raw);
+    const cropped = cropRoutePoints(processed.points, 0.5, 2.5);
+    const croppedProcessed = processRoute(cropped);
+    expect(croppedProcessed.distanceKm).toBeCloseTo(2, 6);
+    // Quota interpolata a 500 m (metà tra 100 e 150) e a 2500 m (metà tra 100 e 200).
+    expect(cropped[0]!.ele).toBeCloseTo(125, 3);
+    expect(cropped[cropped.length - 1]!.ele).toBeCloseTo(150, 3);
+  });
+
+  it('ritagliare l\'intero percorso restituisce (in sostanza) lo stesso percorso', () => {
+    const raw = [routePoint(0, 100), routePoint(1000, 150), routePoint(2000, 100)];
+    const processed = processRoute(raw);
+    const cropped = cropRoutePoints(processed.points, 0, processed.distanceKm);
+    expect(cropped).toHaveLength(raw.length);
+    expect(processRoute(cropped).distanceKm).toBeCloseTo(processed.distanceKm, 6);
+  });
+
+  it('clampa fromKm/toKm fuori dai limiti del percorso', () => {
+    const raw = [routePoint(0, 100), routePoint(1000, 150), routePoint(2000, 100)];
+    const processed = processRoute(raw);
+    const cropped = cropRoutePoints(processed.points, -5, 999);
+    expect(processRoute(cropped).distanceKm).toBeCloseTo(processed.distanceKm, 6);
+  });
+
+  it('intervallo degenere o invertito (toKm <= fromKm) ritorna array vuoto — non normalizza scambiando gli estremi', () => {
+    const raw = [routePoint(0, 100), routePoint(1000, 150), routePoint(2000, 100)];
+    const processed = processRoute(raw);
+    expect(cropRoutePoints(processed.points, 1, 1)).toHaveLength(0);
+    expect(cropRoutePoints(processed.points, 1.5, 1)).toHaveLength(0);
+  });
+
+  it('meno di 2 punti in ingresso ritorna array vuoto', () => {
+    expect(cropRoutePoints([], 0, 1)).toHaveLength(0);
   });
 });

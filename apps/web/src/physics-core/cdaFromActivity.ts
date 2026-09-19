@@ -164,13 +164,16 @@ export function estimateWindFromSamples(samples: CdaSample[], params: PhysicsPar
   };
 }
 
-/** Un gruppo di campioni assegnato a un CdA target (base o una soglia di `cdaTiers`). */
-export interface CdaTierBucket {
+/** Bucket di campioni per soglia di pendenza — generico: usato sia per `CdaSample`
+ * (stima CdA) sia per `MotionSample` (stima potenza teorica, theoreticalPower.ts), che
+ * condividono `gradientPct` ma non altro. Default `CdaSample` per compatibilità con le
+ * chiamate esistenti che non specificano il parametro di tipo. */
+export interface CdaTierBucket<T = CdaSample> {
   /** 'base' = params.cda; un numero = indice in params.cdaTiers da sovrascrivere. */
   target: 'base' | number;
   /** Soglia di pendenza del target, per etichettare l'interfaccia (null per 'base'). */
   thresholdPct: number | null;
-  samples: CdaSample[];
+  samples: T[];
 }
 
 /**
@@ -182,14 +185,17 @@ export interface CdaTierBucket {
  *
  * Senza soglie configurate, restituisce un solo bucket 'base' con tutti i campioni
  * (comportamento equivalente a chiamare `estimateCdaFromSamples` direttamente).
+ *
+ * Generica su `T extends { gradientPct: number }`: la logica di bucketing usa solo
+ * `gradientPct`, quindi funziona identica su `CdaSample` o `MotionSample`.
  */
-export function bucketSamplesByTier(samples: CdaSample[], params: PhysicsParams): CdaTierBucket[] {
+export function bucketSamplesByTier<T extends { gradientPct: number }>(samples: T[], params: PhysicsParams): CdaTierBucket<T>[] {
   const tiers = params.cdaTiers ?? [];
   if (tiers.length === 0) {
     return [{ target: 'base', thresholdPct: null, samples }];
   }
 
-  const buckets: CdaTierBucket[] = [{ target: 'base', thresholdPct: null, samples: [] }];
+  const buckets: CdaTierBucket<T>[] = [{ target: 'base', thresholdPct: null, samples: [] }];
   tiers.forEach((tier, i) => buckets.push({ target: i, thresholdPct: tier.thresholdPct, samples: [] }));
 
   for (const sample of samples) {
@@ -207,11 +213,12 @@ export function bucketSamplesByTier(samples: CdaSample[], params: PhysicsParams)
   return buckets;
 }
 
-/** Un gruppo di campioni assegnato a un tratto di distanza fissa (es. km 0-5, 5-10, ...). */
-export interface CdaDistanceBucket {
+/** Un gruppo di campioni assegnato a un tratto di distanza fissa (es. km 0-5, 5-10, ...).
+ * Generico per lo stesso motivo di `CdaTierBucket` — vedi lì. */
+export interface CdaDistanceBucket<T = CdaSample> {
   fromKm: number;
   toKm: number;
-  samples: CdaSample[];
+  samples: T[];
 }
 
 /**
@@ -225,13 +232,13 @@ export interface CdaDistanceBucket {
  * Richiede `distKm` valorizzato sui campioni (lo imposta `buildCdaSamples`); campioni
  * senza `distKm` vengono ignorati.
  */
-export function bucketSamplesByDistance(samples: CdaSample[], sectionKm: number): CdaDistanceBucket[] {
-  const withDist = samples.filter((s): s is CdaSample & { distKm: number } => s.distKm != null);
+export function bucketSamplesByDistance<T extends { distKm?: number }>(samples: T[], sectionKm: number): CdaDistanceBucket<T>[] {
+  const withDist = samples.filter((s): s is T & { distKm: number } => s.distKm != null);
   if (!(sectionKm > 0) || withDist.length === 0) return [];
 
   const maxDistKm = Math.max(...withDist.map(s => s.distKm));
   const bucketCount = Math.max(1, Math.floor(maxDistKm / sectionKm) + 1);
-  const buckets: CdaDistanceBucket[] = Array.from({ length: bucketCount }, (_, i) => ({
+  const buckets: CdaDistanceBucket<T>[] = Array.from({ length: bucketCount }, (_, i) => ({
     fromKm: i * sectionKm,
     toKm: (i + 1) * sectionKm,
     samples: []
@@ -251,13 +258,13 @@ export function bucketSamplesByDistance(samples: CdaSample[], sectionKm: number)
  * (breakpoint aggiunti cliccando sul grafico), applicato qui ai campioni di un'attività
  * reale invece che al profilo di un percorso da pianificare.
  */
-export function bucketSamplesByBreakpoints(samples: CdaSample[], breakpointsKm: number[]): CdaDistanceBucket[] {
-  const withDist = samples.filter((s): s is CdaSample & { distKm: number } => s.distKm != null);
+export function bucketSamplesByBreakpoints<T extends { distKm?: number }>(samples: T[], breakpointsKm: number[]): CdaDistanceBucket<T>[] {
+  const withDist = samples.filter((s): s is T & { distKm: number } => s.distKm != null);
   if (withDist.length === 0) return [];
 
   const sortedBp = [...new Set(breakpointsKm)].sort((a, b) => a - b);
   const boundaries = [0, ...sortedBp, Infinity];
-  const buckets: CdaDistanceBucket[] = [];
+  const buckets: CdaDistanceBucket<T>[] = [];
   for (let i = 0; i < boundaries.length - 1; i++) {
     buckets.push({ fromKm: boundaries[i]!, toKm: boundaries[i + 1]!, samples: [] });
   }

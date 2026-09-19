@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { processRoute, computeDynamicSections, parseClockTimeToMinutes, type ProcessedPoint } from '@physics-core';
+import { processRoute, computeDynamicSections, parseClockTimeToMinutes, cropRoutePoints, type ProcessedPoint } from '@physics-core';
 import { DEFAULT_PHYSICS_PARAMS, type Route, type RawTrackPoint, type PhysicsParams, type PhysicsParamsOverride, type Tire, type Activity, type CreateActivityInput } from '@shared-schema';
 import { useDataStore } from '../lib/DataStoreContext.js';
 import type { ActivityTrackPoint } from '../activity/parseActivityFile.js';
@@ -29,6 +29,11 @@ export function RouteSplitterApp() {
   const [routes, setRoutes] = useState<Route[]>([]);
   const [selectedRoute, setSelectedRoute] = useState<Route | null>(null);
   const [selectedPoints, setSelectedPoints] = useState<RawTrackPoint[] | null>(null);
+  /** Percorso da cui è stato ritagliato quello attualmente aperto, per il bottone "Torna
+   * all'originale" — un click diretto, senza dover ripescare il percorso dalla lista. Non
+   * è "lo stato di verità" (quello resta lo store: l'originale non viene mai toccato dal
+   * ritaglio), solo una scorciatoia per la sessione corrente. */
+  const [originalRouteBackup, setOriginalRouteBackup] = useState<{ id: string; name: string } | null>(null);
   const [routeNameDraft, setRouteNameDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -273,6 +278,7 @@ export function RouteSplitterApp() {
       setError(null);
       setHoverPoint(null);
       setAddMode(false);
+      setOriginalRouteBackup(null);
       const route = await store.routes.get(id);
       const points = await store.routes.getPoints(id);
       setSelectedRoute(route);
@@ -337,6 +343,56 @@ export function RouteSplitterApp() {
     },
     [store, selectedRoute, refreshRoutes, backToUpload]
   );
+
+  /** Ritaglia il percorso APERTO su [fromKm, toKm] e lo salva come un NUOVO percorso
+   * indipendente — l'originale non viene toccato, quindi "ripristinare il percorso
+   * originale" è semplicemente riselezionarlo dalla lista (nessuna logica di undo da
+   * gestire qui). `cropRoutePoints` interpola gli estremi esattamente sul confine di
+   * sezione richiesto, non tronca al punto GPX più vicino. */
+  const handleCropSection = useCallback(
+    async (fromKm: number, toKm: number) => {
+      if (!selectedRoute || processedPoints.length < 2) return;
+      setBusy(true);
+      setError(null);
+      setNotice(null);
+      try {
+        const croppedRaw = cropRoutePoints(processedPoints, fromKm, toKm);
+        if (croppedRaw.length < 2) {
+          throw new Error('Sezione troppo corta da ritagliare.');
+        }
+        const croppedProcessed = processRoute(croppedRaw);
+        const cropped = await store.routes.create(
+          {
+            athleteId: selectedRoute.athleteId,
+            name: `${selectedRoute.name} — ritaglio ${fromKm.toFixed(2)}-${toKm.toFixed(2)} km`,
+            sourceFileName: selectedRoute.sourceFileName,
+            distanceKm: croppedProcessed.distanceKm,
+            elevationGain: croppedProcessed.elevationGain,
+            elevationLoss: croppedProcessed.elevationLoss,
+            maxElevation: croppedProcessed.maxElevation,
+            minElevation: croppedProcessed.minElevation
+          },
+          croppedRaw
+        );
+        await refreshRoutes();
+        await selectRoute(cropped.id);
+        setOriginalRouteBackup({ id: selectedRoute.id, name: selectedRoute.name });
+        setNotice(`Percorso ritagliato salvato come nuovo percorso "${cropped.name}". L'originale non è stato modificato.`);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Errore sconosciuto durante il ritaglio.');
+      } finally {
+        setBusy(false);
+      }
+    },
+    [store, selectedRoute, processedPoints, refreshRoutes, selectRoute]
+  );
+
+  /** Torna al percorso da cui è stato ritagliato quello attualmente aperto — un click
+   * diretto invece di dover ripescare l'originale dalla lista percorsi. */
+  const handleRevertToOriginalRoute = useCallback(async () => {
+    if (!originalRouteBackup) return;
+    await selectRoute(originalRouteBackup.id);
+  }, [originalRouteBackup, selectRoute]);
 
   const saveRouteName = useCallback(async () => {
     if (!selectedRoute || routeNameDraft.trim() === '' || routeNameDraft === selectedRoute.name) return;
@@ -457,6 +513,16 @@ export function RouteSplitterApp() {
               onChange={e => setRouteNameDraft(e.target.value)}
               onBlur={() => void saveRouteName()}
             />
+            {originalRouteBackup && (
+              <button
+                type="button"
+                className="btn ghost"
+                title={`Torna a "${originalRouteBackup.name}" (il percorso da cui è stato ritagliato quello aperto ora)`}
+                onClick={() => void handleRevertToOriginalRoute()}
+              >
+                ◀ Torna all'originale
+              </button>
+            )}
             <label className="start-time-field">
               Ora partenza (opz.)
               <input type="time" value={startTime} onChange={e => setPlannedStartTime(e.target.value || null)} />
@@ -639,6 +705,7 @@ export function RouteSplitterApp() {
             onUpdateSpeed={(id, speedKmh) => void updateBreakpoint(id, { speedKmh })}
             onUpdatePower={(id, powerWatts) => void updateBreakpoint(id, { powerWatts })}
             onRemove={id => void removeBreakpoint(id)}
+            onCrop={(fromKm, toKm) => void handleCropSection(fromKm, toKm)}
           />
 
           {plan && processedPoints.length > 1 && (

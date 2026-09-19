@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from 'react';
 import {
   estimateCdaFromSamples,
   estimateWindFromSamples,
+  estimateTheoreticalPower,
   bucketSamplesByTier,
   bucketSamplesByBreakpoints,
   makeUniformWindZones,
@@ -11,11 +12,12 @@ import {
   type PhysicsParams,
   type SectionBreakpoint,
   type CdaSample,
+  type MotionSample,
   type WindEstimateResult
 } from '@physics-core';
 import type { Tire, Activity, CreateActivityInput } from '@shared-schema';
 import { parseActivityText, type ActivityTrackPoint } from '../activity/parseActivityFile.js';
-import { buildCdaSamples } from '../activity/activitySamples.js';
+import { buildCdaSamples, buildMotionSamples, cropActivityPoints } from '../activity/activitySamples.js';
 import { AthleteProfileCard } from './AthleteProfileCard.js';
 import { RideConditionsPanel } from './RideConditionsPanel.js';
 import { WeatherPanel } from './WeatherPanel.js';
@@ -84,7 +86,30 @@ interface ActivitySectionRow {
   breakpointId: string | null;
 }
 
+/** Una riga della tabella "potenza teorica": confronto teorica (da velocità, sempre
+ * disponibile) vs reale (da misuratore, se presente) sullo stesso tratto di `sectionRows`
+ * — stessi confini (`bpKm`), stesso indice, per poter leggere le due tabelle appaiate. */
+interface TheoreticalPowerSectionRow {
+  index: number;
+  fromKm: number;
+  toKm: number;
+  avgGradient: number;
+  /** Potenza teorica media sul tratto (W) — media delle righe di `estimateTheoreticalPower`
+   * ricadute in questo tratto. Null se il tratto non ha abbastanza intervalli validi. */
+  avgTheoreticalPowerW: number | null;
+  usedIntervals: number;
+  /** Potenza reale media sullo STESSO tratto, dalla riga corrispondente di `sectionRows` —
+   * null se l'attività non ha canale potenza. */
+  avgRealPowerW: number | null;
+  /** reale − teorica, W. Positivo = il misuratore (o l'atleta) legge/produce più di quanto
+   * la fisica preveda per la velocità osservata; negativo = il contrario. Null se manca
+   * uno dei due termini. */
+  biasW: number | null;
+  biasPct: number | null;
+}
+
 const MIN_CDA_SAMPLES = 20;
+const MIN_THEORETICAL_POWER_SAMPLES = 20;
 
 function windBadge(headwindKmh: number) {
   if (Math.abs(headwindKmh) < 0.5) {
@@ -168,6 +193,17 @@ export function ActivityAnalysisView({
   const [savingActivity, setSavingActivity] = useState(false);
   const [saveActivityError, setSaveActivityError] = useState<string | null>(null);
   const [loadingActivityId, setLoadingActivityId] = useState<string | null>(null);
+  /** Snapshot dell'attività aperta PRIMA di un ritaglio, per "Torna all'originale" — a
+   * differenza del ritaglio percorso (Tab 1, che riseleziona dallo store), qui il backup è
+   * tenuto in memoria: funziona anche se l'attività originale non era mai stata salvata
+   * (caricata da file e basta), non solo per quelle già nello storico. */
+  const [originalActivityBackup, setOriginalActivityBackup] = useState<{
+    points: ActivityTrackPoint[];
+    fileName: string | null;
+    activityStartIso: string | null;
+    sectionBreakpoints: SectionBreakpoint[];
+    currentActivityId: string | null;
+  } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const addBreakpoint = (distKm: number) => {
@@ -215,6 +251,30 @@ export function ActivityAnalysisView({
       return { ...s, windKmh: effectiveHeadwindKmh(windSpeedKmh, windDirectionDeg, bearing) };
     });
   }, [cdaBuilt, display, windSpeedKmh, windDirectionDeg]);
+
+  // Potenza teorica (F-teorici): ricostruita da velocità+pendenza reali via bilancio
+  // energetico invertito (`estimateTheoreticalPower`), NON dal canale potenza — funziona
+  // anche su attività senza misuratore (`buildMotionSamples` non richiede powerW, a
+  // differenza di `buildCdaSamples`/`cdaBuilt` sopra). Quando la potenza reale è comunque
+  // presente, questa serie resta comunque utile come confronto indipendente (D-uso Tab 2).
+  const motionBuilt = useMemo(
+    () => (activityPoints ? buildMotionSamples(activityPoints, { smoothingRadiusMeters }) : null),
+    [activityPoints, smoothingRadiusMeters]
+  );
+
+  const windedMotionSamples = useMemo<MotionSample[] | null>(() => {
+    if (!motionBuilt || !display) return null;
+    if (windSpeedKmh === 0) return motionBuilt.samples;
+    return motionBuilt.samples.map(s => {
+      const bearing = routeBearingAtDistKm(display.points, s.distKm);
+      return { ...s, windKmh: effectiveHeadwindKmh(windSpeedKmh, windDirectionDeg, bearing) };
+    });
+  }, [motionBuilt, display, windSpeedKmh, windDirectionDeg]);
+
+  const theoreticalPowerSeries = useMemo(() => {
+    if (!windedMotionSamples || windedMotionSamples.length === 0) return [];
+    return estimateTheoreticalPower(windedMotionSamples, physicsParams).map(r => ({ distKm: r.distKm, powerWatts: r.theoreticalPowerW }));
+  }, [windedMotionSamples, physicsParams]);
 
   const tierResults = useMemo<BucketResult[]>(() => {
     if (!windedSamples) return [];
@@ -284,6 +344,62 @@ export function ActivityAnalysisView({
     return { min: Math.min(...values), max: Math.max(...values) };
   }, [sectionRows]);
 
+  const theoreticalPowerRows = useMemo<TheoreticalPowerSectionRow[]>(() => {
+    if (!windedMotionSamples || !display) return [];
+    const totalKm = display.distanceKm;
+    const sortedBps = [...sectionBreakpoints].sort((a, b) => a.distKm - b.distKm);
+    const bpKm = sortedBps.map(b => b.distKm);
+    const buckets = bucketSamplesByBreakpoints(windedMotionSamples, bpKm);
+
+    return buckets.map((bucket, i) => {
+      const toKmFinite = Number.isFinite(bucket.toKm) ? bucket.toKm : totalKm;
+      const { gain, loss } = computeGainLossBetween(display.points, bucket.fromKm, toKmFinite);
+      const distanceKm = toKmFinite - bucket.fromKm;
+      const avgGradient = distanceKm > 0 ? ((gain - loss) / (distanceKm * 1000)) * 100 : 0;
+
+      // Bilancio energetico invertito PER TRATTO (non sull'intera uscita): ogni bucket è
+      // una sotto-sequenza ordinata e contigua di windedMotionSamples, quindi il termine
+      // cinetico resta corretto agli estremi interni del tratto — si perde solo
+      // l'intervallo a cavallo del confine (stesso compromesso già accettato dalle altre
+      // metriche per-sezione di questa tabella).
+      const rows = estimateTheoreticalPower(bucket.samples, physicsParams);
+      const avgTheoreticalPowerW = rows.length > 0 ? rows.reduce((s, r) => s + r.theoreticalPowerW, 0) / rows.length : null;
+
+      // Stesso ordine/confini di sectionRows (stessi bpKm) → stesso indice = stesso tratto,
+      // così le due tabelle si leggono appaiate senza dover ri-matchare per distanza.
+      const avgRealPowerW = sectionRows[i]?.avgPowerW ?? null;
+      const biasW = avgTheoreticalPowerW != null && avgRealPowerW != null ? avgRealPowerW - avgTheoreticalPowerW : null;
+      const biasPct = biasW != null && avgTheoreticalPowerW != null && avgTheoreticalPowerW > 1 ? (biasW / avgTheoreticalPowerW) * 100 : null;
+
+      return {
+        index: i + 1,
+        fromKm: bucket.fromKm,
+        toKm: toKmFinite,
+        avgGradient,
+        avgTheoreticalPowerW,
+        usedIntervals: rows.length,
+        avgRealPowerW,
+        biasW,
+        biasPct
+      };
+    });
+  }, [windedMotionSamples, display, sectionBreakpoints, physicsParams, sectionRows]);
+
+  // Stesse medie della tabella per-tratto ma sull'INTERA uscita, per un colpo d'occhio
+  // prima di guardare il dettaglio — stesso principio di `overallWindEstimate` sotto.
+  const overallTheoreticalPower = useMemo(() => {
+    if (!windedMotionSamples || windedMotionSamples.length < 2) return null;
+    const rows = estimateTheoreticalPower(windedMotionSamples, physicsParams);
+    if (rows.length === 0) return null;
+    return { avgTheoreticalPowerW: rows.reduce((s, r) => s + r.theoreticalPowerW, 0) / rows.length, n: rows.length };
+  }, [windedMotionSamples, physicsParams]);
+
+  const overallAvgRealPowerW = useMemo(() => {
+    if (!cdaBuilt) return null;
+    const withPower = cdaBuilt.samples.filter(s => s.powerW > 0);
+    return withPower.length > 0 ? withPower.reduce((s, x) => s + x.powerW, 0) / withPower.length : null;
+  }, [cdaBuilt]);
+
   // Vento stimato dalla fisica sull'INTERA uscita (non sezionato) — un solo numero da
   // confrontare a colpo d'occhio con la bussola sopra, prima ancora di guardare le sezioni.
   const overallWindEstimate = useMemo<WindEstimateResult | null>(
@@ -299,6 +415,7 @@ export function ActivityAnalysisView({
     setSectionBreakpoints([]);
     setFileName(file.name);
     setActivityStartIso(null);
+    setOriginalActivityBackup(null);
     // Un file appena caricato da disco è per definizione un'uscita non ancora salvata (o
     // comunque non necessariamente la stessa già aperta) — nessun collegamento implicito con
     // un salvataggio precedente finché l'atleta non preme di nuovo "Salva".
@@ -360,9 +477,79 @@ export function ActivityAnalysisView({
     }
   };
 
+  /** Ritaglia l'attività aperta su [fromKm, toKm] e la salva come una NUOVA attività
+   * indipendente (stesso principio del ritaglio percorso in Tab 1: mai una mutazione
+   * in-place). Passa poi la vista corrente al ritaglio, salvando prima uno snapshot
+   * dell'originale in `originalActivityBackup` per il bottone "Torna all'originale". */
+  const handleCropActivitySection = async (fromKm: number, toKm: number) => {
+    if (!activityPoints) return;
+    setSavingActivity(true);
+    setSaveActivityError(null);
+    try {
+      const { points: cropped, timeOffsetSec } = cropActivityPoints(activityPoints, fromKm, toKm);
+      if (cropped.length < 5) {
+        throw new Error('Sezione troppo corta da ritagliare.');
+      }
+      const croppedDisplay = buildActivityDisplay(cropped);
+      if (!croppedDisplay) {
+        throw new Error('Impossibile analizzare il ritaglio.');
+      }
+
+      const newActivityDate = activityStartIso ? new Date(new Date(activityStartIso).getTime() + timeOffsetSec * 1000).toISOString() : new Date().toISOString();
+      const croppedName = `${fileName ?? 'attività senza nome'} — ritaglio ${fromKm.toFixed(2)}-${toKm.toFixed(2)} km`;
+
+      const newId = await onSaveActivity(
+        {
+          routeId: null,
+          powerPlanId: null,
+          sourceFileName: croppedName,
+          activityDate: newActivityDate,
+          summary: {
+            durationHours: croppedDisplay.durationSec / 3600,
+            distanceKm: croppedDisplay.distanceKm,
+            avgPowerWatts: croppedDisplay.avgPowerW ?? undefined,
+            elevationGain: croppedDisplay.elevationGain
+          },
+          physicsParamsSnapshot: physicsParams,
+          windSpeedKmh,
+          windDirectionDeg,
+          sectionBreakpointsKm: []
+        },
+        cropped
+      );
+
+      setOriginalActivityBackup({ points: activityPoints, fileName, activityStartIso, sectionBreakpoints, currentActivityId });
+      setActivityPoints(cropped);
+      setHasPowerData(cropped.some(p => p.powerW != null && p.powerW > 0));
+      setFileName(croppedName);
+      setActivityStartIso(newActivityDate);
+      setSectionBreakpoints([]);
+      setCurrentActivityId(newId);
+    } catch (err) {
+      setSaveActivityError(err instanceof Error ? err.message : 'Errore durante il ritaglio.');
+    } finally {
+      setSavingActivity(false);
+    }
+  };
+
+  /** Torna all'attività aperta prima dell'ultimo ritaglio — ripristino puramente in
+   * memoria (nessuna chiamata allo store: l'originale, se già salvato, non è mai stato
+   * toccato; se non era salvato, il backup in memoria è l'unica copia). */
+  const handleRevertToOriginalActivity = () => {
+    if (!originalActivityBackup) return;
+    setActivityPoints(originalActivityBackup.points);
+    setHasPowerData(originalActivityBackup.points.some(p => p.powerW != null && p.powerW > 0));
+    setFileName(originalActivityBackup.fileName);
+    setActivityStartIso(originalActivityBackup.activityStartIso);
+    setSectionBreakpoints(originalActivityBackup.sectionBreakpoints);
+    setCurrentActivityId(originalActivityBackup.currentActivityId);
+    setOriginalActivityBackup(null);
+  };
+
   const handleLoadActivity = async (id: string) => {
     setLoadingActivityId(id);
     setErrorMsg(null);
+    setOriginalActivityBackup(null);
     try {
       const result = await onLoadActivityData(id);
       if (!result) {
@@ -499,6 +686,16 @@ export function ActivityAnalysisView({
             {savingActivity ? 'Salvataggio…' : currentActivityId ? '✓ Salvata' : '💾 Salva questa uscita'}
           </button>
         )}
+        {originalActivityBackup && (
+          <button
+            type="button"
+            className="btn ghost"
+            title={`Torna a "${originalActivityBackup.fileName ?? 'attività senza nome'}" (l'attività aperta prima dell'ultimo ritaglio)`}
+            onClick={handleRevertToOriginalActivity}
+          >
+            ◀ Torna all'originale
+          </button>
+        )}
       </div>
 
       {saveActivityError && <p className="app-error activity-upload-row">{saveActivityError}</p>}
@@ -577,6 +774,8 @@ export function ActivityAnalysisView({
                 onAddBreakpoint={addBreakpoint}
                 onRemoveBreakpoint={removeBreakpoint}
                 windZones={windZones}
+                plannedPowerSeries={theoreticalPowerSeries}
+                plannedPowerLabel="teorica (da velocità)"
               />
             </div>
           </div>
@@ -727,7 +926,16 @@ export function ActivityAnalysisView({
                                     <span className="physics-hint">n. d. (n={row.usedSamples})</span>
                                   )}
                                 </td>
-                                <td>{row.breakpointId && <button onClick={() => removeBreakpoint(row.breakpointId!)}>✕</button>}</td>
+                                <td>
+                                  <button
+                                    type="button"
+                                    title={`Ritaglia l'attività su ${row.fromKm.toFixed(2)}–${Number.isFinite(row.toKm) ? row.toKm.toFixed(2) : display?.distanceKm.toFixed(2)} km (salva come nuova attività; l'originale resta aperto/ripristinabile)`}
+                                    onClick={() => void handleCropActivitySection(row.fromKm, Number.isFinite(row.toKm) ? row.toKm : (display?.distanceKm ?? row.toKm))}
+                                  >
+                                    ✂
+                                  </button>
+                                  {row.breakpointId && <button onClick={() => removeBreakpoint(row.breakpointId!)}>✕</button>}
+                                </td>
                               </tr>
                             );
                           })}
@@ -737,6 +945,102 @@ export function ActivityAnalysisView({
                   </>
                 )}
               </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {activityPoints && (
+        <div className="activity-theoretical-power-section">
+          <h3>Potenza teorica (da velocità)</h3>
+          <p className="physics-hint">
+            Potenza ricostruita dalla velocità e pendenza REGISTRATE (non dal canale potenza), invertendo il bilancio
+            energetico — include il termine cinetico (accelerazione), non solo l'equilibrio stazionario. Funziona
+            anche senza misuratore; con un misuratore, il confronto sotto indica se il PM legge sistematicamente
+            alto o basso (o se CdA/Crr non sono ancora tarati bene per quel tipo di terreno).
+          </p>
+
+          {(!motionBuilt || motionBuilt.samples.length < MIN_THEORETICAL_POWER_SAMPLES) ? (
+            <p className="physics-hint">
+              Solo {motionBuilt?.samples.length ?? 0} campioni utilizzabili (minimo {MIN_THEORETICAL_POWER_SAMPLES}):
+              file troppo corto o troppe fermate per una stima affidabile.
+            </p>
+          ) : (
+            <>
+              {overallTheoreticalPower && (
+                <p className="physics-hint">
+                  Sull'intera uscita: <strong>{Math.round(overallTheoreticalPower.avgTheoreticalPowerW)} W</strong>{' '}
+                  teorici (n={overallTheoreticalPower.n})
+                  {overallAvgRealPowerW != null && (
+                    <>
+                      {' '}
+                      vs <strong>{Math.round(overallAvgRealPowerW)} W</strong> reali — Δ{' '}
+                      <strong>
+                        {overallAvgRealPowerW - overallTheoreticalPower.avgTheoreticalPowerW >= 0 ? '+' : ''}
+                        {Math.round(overallAvgRealPowerW - overallTheoreticalPower.avgTheoreticalPowerW)} W
+                      </strong>
+                      .
+                    </>
+                  )}
+                </p>
+              )}
+
+              {theoreticalPowerRows.length === 0 ? (
+                <p className="physics-hint">
+                  Nessuna sezione ancora definita — aggiungine una dal grafico o dalla mappa con "✛ Aggiungi punto".
+                </p>
+              ) : (
+                <div className="sections-table-wrap">
+                  <table className="sections-table">
+                    <thead>
+                      <tr>
+                        <th>#</th>
+                        <th>Da → A</th>
+                        <th>Pend.</th>
+                        <th>Potenza teorica</th>
+                        <th>Potenza reale</th>
+                        <th>Δ (reale − teorica)</th>
+                        <th>Δ%</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {theoreticalPowerRows.map(row => (
+                        <tr key={`${row.fromKm}-${row.toKm}`}>
+                          <td>{row.index}</td>
+                          <td className="mono">
+                            {row.fromKm.toFixed(2)} → {Number.isFinite(row.toKm) ? row.toKm.toFixed(2) : '∞'} km
+                          </td>
+                          <td className="mono">
+                            {row.avgGradient >= 0 ? '+' : ''}
+                            {row.avgGradient.toFixed(1)}%
+                          </td>
+                          <td className="mono">
+                            {row.avgTheoreticalPowerW != null ? (
+                              <>
+                                {Math.round(row.avgTheoreticalPowerW)} W <span className="physics-hint">(n={row.usedIntervals})</span>
+                              </>
+                            ) : (
+                              <span className="physics-hint">n. d.</span>
+                            )}
+                          </td>
+                          <td className="mono">{row.avgRealPowerW != null ? `${Math.round(row.avgRealPowerW)} W` : '—'}</td>
+                          <td className="mono">
+                            {row.biasW != null ? (
+                              <span className={row.biasW >= 0 ? 'gain' : 'loss'}>
+                                {row.biasW >= 0 ? '+' : ''}
+                                {Math.round(row.biasW)} W
+                              </span>
+                            ) : (
+                              '—'
+                            )}
+                          </td>
+                          <td className="mono">{row.biasPct != null ? `${row.biasPct >= 0 ? '+' : ''}${row.biasPct.toFixed(1)}%` : '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </>
           )}
         </div>

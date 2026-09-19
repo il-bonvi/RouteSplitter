@@ -12,6 +12,10 @@ interface SectionsTableProps {
   onUpdateSpeed: (id: string, speedKmh: number) => void;
   onUpdatePower: (id: string, powerWatts: number) => void;
   onRemove: (id: string) => void;
+  /** Ritaglia il percorso su [fromKm, toKm] di questa sezione e lo salva come nuovo
+   * percorso indipendente (vedi `cropRoutePoints`) — l'originale resta invariato.
+   * Opzionale: se assente, il bottone di ritaglio non viene mostrato. */
+  onCrop?: (fromKm: number, toKm: number) => void;
 }
 
 function windBadge(headwindKmh: number) {
@@ -26,7 +30,7 @@ function windBadge(headwindKmh: number) {
   );
 }
 
-export function SectionsTable({ sections, calcMode, showCda = false, onUpdateLabel, onUpdateSpeed, onUpdatePower, onRemove }: SectionsTableProps) {
+export function SectionsTable({ sections, calcMode, showCda = false, onUpdateLabel, onUpdateSpeed, onUpdatePower, onRemove, onCrop }: SectionsTableProps) {
   if (sections.length === 0) {
     return <p className="sections-table-empty">Nessuna sezione: aggiungi un punto sulla mappa o sul grafico.</p>;
   }
@@ -103,7 +107,18 @@ export function SectionsTable({ sections, calcMode, showCda = false, onUpdateLab
                 <td className="mono cum">{s.cumAvgSpeedKmh.toFixed(1)} km/h</td>
                 <td className="mono time">{formatTime(s.timeHours)}</td>
                 <td className="mono cum">{formatTime(s.cumTimeHours)}</td>
-                <td>{removable && <button onClick={() => onRemove(s.to.id)}>✕</button>}</td>
+                <td>
+                  {onCrop && (
+                    <button
+                      type="button"
+                      title={`Ritaglia il percorso su ${s.from.distKm.toFixed(2)}–${s.to.distKm.toFixed(2)} km (salvato come nuovo percorso, l'originale resta invariato)`}
+                      onClick={() => onCrop(s.from.distKm, s.to.distKm)}
+                    >
+                      ✂
+                    </button>
+                  )}
+                  {removable && <button onClick={() => onRemove(s.to.id)}>✕</button>}
+                </td>
               </tr>
             );
           })}

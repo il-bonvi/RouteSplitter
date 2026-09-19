@@ -20,7 +20,12 @@ function generateWindZoneId(): string {
   return `wz-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-/** Riassegna le etichette "S1", "S2"... alle sezioni senza nome personalizzato, in ordine di distanza. */
+/** Riassegna le etichette "S1", "S2"... alle sezioni senza nome personalizzato, in ordine di
+ * distanza. Un nuovo breakpoint deve arrivare con `sectionLabel: null` (mai una stringa
+ * letterale placeholder tipo 'Sezione') — la regex sotto riconosce come "auto" solo `null` o
+ * un'etichetta già nella forma S<n>: una stringa letterale diversa la farebbe scambiare per
+ * un nome scelto dall'utente e non verrebbe mai più rinumerata (bug reale osservato: nuove
+ * sezioni bloccate sull'etichetta letterale invece di S2, S3, ...). */
 function renumberSections(breakpoints: Breakpoint[]): Breakpoint[] {
   let n = 1;
   return breakpoints.map(bp => {
@@ -86,7 +91,7 @@ export function useSectionPlan(routeId: string | null, distanceKm: number) {
         id: generateBreakpointId(),
         distKm: clamped,
         fixed: false,
-        sectionLabel: 'Sezione',
+        sectionLabel: null,
         speedKmh: plan.defaultSpeedKmh,
         powerWatts: plan.defaultPowerWatts
       };
@@ -120,7 +125,7 @@ export function useSectionPlan(routeId: string | null, distanceKm: number) {
           id: generateBreakpointId(),
           distKm: rounded,
           fixed: false,
-          sectionLabel: 'Sezione',
+          sectionLabel: null,
           speedKmh: plan.defaultSpeedKmh,
           powerWatts: plan.defaultPowerWatts
         });

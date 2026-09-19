@@ -180,3 +180,38 @@ export function distanceWeightedMeanBearingDeg(points: Array<{ lat: number; lon:
   const deg = (meanRad * 180) / Math.PI;
   return deg < 0 ? deg + 360 : deg;
 }
+
+/**
+ * Ritaglia un percorso già processato (`ProcessedPoint[]`, con `dist` cumulata) a un
+ * intervallo `[fromKm, toKm]`, interpolando i due estremi esattamente sul confine
+ * richiesto (stessa tecnica di `getInterpolatedPoint`, già usata per D+/D- e breakpoint) —
+ * non tronca al punto GPX più vicino, quindi il ritaglio riproduce esattamente la distanza
+ * richiesta invece di sbandierare qualche metro in più o in meno.
+ *
+ * Ritorna punti grezzi (`RawTrackPoint`, solo lat/lon/ele) pronti per `processRoute` e per
+ * il salvataggio come nuovo percorso — il chiamante decide se e come persisterli; questa
+ * funzione non tocca lo store, resta puro calcolo (stessa filosofia di tutto physics-core).
+ *
+ * `fromKm`/`toKm` vengono clampati ai limiti del percorso, ma NON normalizzati se
+ * invertiti: `toKm < fromKm` è quasi certamente un errore di chi chiama (es. estremi di
+ * sezione scambiati) e va segnalato con un array vuoto, non corretto in silenzio
+ * scambiandoli — un crop silenzioso nella direzione sbagliata sarebbe più insidioso di un
+ * crop che visibilmente non produce nulla.
+ */
+export function cropRoutePoints(points: ProcessedPoint[], fromKm: number, toKm: number): RawTrackPoint[] {
+  if (points.length < 2) return [];
+  const lastDistM = points[points.length - 1]!.dist;
+  const fromM = Math.max(0, Math.min(fromKm * 1000, lastDistM));
+  const toM = Math.max(0, Math.min(toKm * 1000, lastDistM));
+  if (!(toM > fromM)) return [];
+
+  const start = getInterpolatedPoint(points, fromM);
+  const end = getInterpolatedPoint(points, toM);
+  const middle = points.filter(p => p.dist > fromM && p.dist < toM).map(p => ({ lat: p.lat, lon: p.lon, ele: p.ele }));
+
+  return [
+    { lat: start.lat, lon: start.lon, ele: start.ele },
+    ...middle,
+    { lat: end.lat, lon: end.lon, ele: end.ele }
+  ];
+}

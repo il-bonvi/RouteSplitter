@@ -191,8 +191,10 @@ describe('bucketSamplesByDistance', () => {
   });
 
   it('ritorna array vuoto senza campioni con distKm o con sectionKm non positivo', () => {
-    expect(bucketSamplesByDistance([{ speedMS: 8, powerW: 200, gradientPct: 0 }], 5)).toEqual([]);
-    expect(bucketSamplesByDistance([{ speedMS: 8, powerW: 200, gradientPct: 0, distKm: 1 }], 0)).toEqual([]);
+    const noDist: CdaSample[] = [{ speedMS: 8, powerW: 200, gradientPct: 0 }];
+    const withDist: CdaSample[] = [{ speedMS: 8, powerW: 200, gradientPct: 0, distKm: 1 }];
+    expect(bucketSamplesByDistance(noDist, 5)).toEqual([]);
+    expect(bucketSamplesByDistance(withDist, 0)).toEqual([]);
   });
 });
 
