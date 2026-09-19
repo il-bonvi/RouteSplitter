@@ -42,7 +42,7 @@ export interface BuildCdaSamplesOptions {
    * un'attività reale non è mai a velocità realmente costante punto per punto. Stessa
    * tecnica già usata altrove nell'app per lo smoothing del profilo altimetrico
    * (`smoothByDistance`, physics-core), qui riusata per un motivo diverso (stabilità della
-   * stima invece che resa grafica). Default 60 m: abbastanza per smussare i transitori di
+   * stima invece che resa grafica). Default 50 m (coerente con lo slider "Smoothing" del grafico — vedi smoothingRadiusMeters in ActivityAnalysisView): abbastanza per smussare i transitori di
    * pedalata senza cancellare le variazioni di pendenza reali del percorso. */
   smoothingRadiusMeters?: number;
   /** Sotto questa velocità (km/h) un punto è considerato fermo/quasi fermo (semafori,
@@ -70,7 +70,7 @@ export function buildCdaSamples(
   points: ActivityTrackPoint[],
   options: BuildCdaSamplesOptions = {}
 ): BuildCdaSamplesResult {
-  const smoothingRadiusMeters = options.smoothingRadiusMeters ?? 60;
+  const smoothingRadiusMeters = options.smoothingRadiusMeters ?? 50;
   const minSpeedMS = (options.minSpeedKmh ?? 3) / 3.6;
 
   const valid = points.filter(
@@ -108,7 +108,7 @@ export function buildCdaSamples(
 }
 
 export interface BuildMotionSamplesOptions {
-  /** Stesso significato di `BuildCdaSamplesOptions.smoothingRadiusMeters` (default 60 m):
+  /** Stesso significato di `BuildCdaSamplesOptions.smoothingRadiusMeters` (default 50 m, stesso motivo):
    * qui serve anche a `estimateTheoreticalPower`, che assume l'ipotesi di quasi-equilibrio
    * per intervallo e altrimenti amplificherebbe il rumore GPS (v² nel termine aero). */
   smoothingRadiusMeters?: number;
@@ -133,7 +133,7 @@ export interface BuildMotionSamplesResult {
  * reale quando il misuratore c'è.
  */
 export function buildMotionSamples(points: ActivityTrackPoint[], options: BuildMotionSamplesOptions = {}): BuildMotionSamplesResult {
-  const smoothingRadiusMeters = options.smoothingRadiusMeters ?? 60;
+  const smoothingRadiusMeters = options.smoothingRadiusMeters ?? 50;
   const minSpeedMS = (options.minSpeedKmh ?? 3) / 3.6;
 
   const valid = points.filter(p => Number.isFinite(p.lat) && Number.isFinite(p.lon) && Number.isFinite(p.timeSec));

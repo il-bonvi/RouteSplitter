@@ -3,6 +3,10 @@ import { useEffect, useRef } from 'react';
 interface SmoothingControlProps {
   radiusMeters: number;
   onChange: (radiusMeters: number) => void;
+  /** Testo dell'etichetta — default pensato per l'uso "solo display" (Tab 1, profilo
+   * altimetrico del percorso pianificato). Tab 2 passa un testo diverso perché lì lo
+   * stesso raggio alimenta anche `estimateTheoreticalPower` (non è più "solo grafico"). */
+  label?: string;
 }
 
 /**
@@ -18,7 +22,7 @@ interface SmoothingControlProps {
  * di quanti il browser possa disegnare, percepiti come scatti. Si accumulano i delta e si
  * applica un solo `onChange` per frame con `requestAnimationFrame`.
  */
-export function SmoothingControl({ radiusMeters, onChange }: SmoothingControlProps) {
+export function SmoothingControl({ radiusMeters, onChange, label = 'Smoothing (solo grafico):' }: SmoothingControlProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const radiusRef = useRef(radiusMeters);
   const rafRef = useRef<number | null>(null);
@@ -44,7 +48,7 @@ export function SmoothingControl({ radiusMeters, onChange }: SmoothingControlPro
 
   return (
     <label className="smoothing-control">
-      <span>Smoothing (solo grafico):</span>
+      <span>{label}</span>
       <input ref={inputRef} type="range" min={0} max={120} step={10} value={radiusMeters} onChange={e => onChange(Number(e.target.value))} />
       <span className="smoothing-value">{radiusMeters} m</span>
     </label>

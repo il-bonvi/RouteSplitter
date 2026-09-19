@@ -38,6 +38,13 @@ interface ActivityElevationChartProps {
   points: ActivityDisplayPoint[];
   smoothingRadiusMeters: number;
   onSmoothingChange: (radiusMeters: number) => void;
+  /** Media mobile in SECONDI per potenza/velocità reali (vedi commento sullo state qui
+   * sotto). Opzionale e controllato dal chiamante — se assente, il componente mantiene il
+   * comportamento storico (stato interno, default 0): serve solo a chi (Tab 2) deve
+   * riusare lo STESSO valore anche fuori da questo grafico (per smussare la potenza
+   * teorica con la stessa finestra della reale, invece di un valore scollegato). */
+  streamSmoothingSec?: number;
+  onStreamSmoothingChange?: (radiusSeconds: number) => void;
   onHoverPoint?: (info: HoverInfo | null) => void;
   breakpoints: SectionBreakpoint[];
   addMode: boolean;
@@ -127,6 +134,8 @@ export function ActivityElevationChart({
   points,
   smoothingRadiusMeters,
   onSmoothingChange,
+  streamSmoothingSec: streamSmoothingSecProp,
+  onStreamSmoothingChange,
   onHoverPoint,
   breakpoints,
   addMode,
@@ -173,7 +182,15 @@ export function ActivityElevationChart({
   // elevazione/pendenza/potenza a distanza fissa) e dalle serie pianificate (mai toccate).
   // Default 0 = nessun cambiamento rispetto a oggi: dato grezzo dal file FIT finché l'utente
   // non scrive un valore nella casella.
-  const [streamSmoothingSec, setStreamSmoothingSec] = useState(0);
+  //
+  // Controllato-con-fallback: se il chiamante passa `streamSmoothingSec`/
+  // `onStreamSmoothingChange` (Tab 2, per riusare lo stesso valore anche fuori da questo
+  // grafico — vedi commento sulla prop), il valore vive lì e questo stato interno resta
+  // inutilizzato; altrimenti (chiamanti esistenti, es. Tab 3) il comportamento è identico a
+  // prima: stato locale, default 0.
+  const [internalStreamSmoothingSec, setInternalStreamSmoothingSec] = useState(0);
+  const streamSmoothingSec = streamSmoothingSecProp ?? internalStreamSmoothingSec;
+  const setStreamSmoothingSec = onStreamSmoothingChange ?? setInternalStreamSmoothingSec;
 
   const onHoverPointRef = useRef(onHoverPoint);
   const onAddBreakpointRef = useRef(onAddBreakpoint);
@@ -877,7 +894,7 @@ export function ActivityElevationChart({
                 <NumberField className="stream-smoothing-input" min={0} max={300} step={5} value={streamSmoothingSec} onCommit={v => setStreamSmoothingSec(Math.max(0, v))} />
               </label>
             )}
-            <SmoothingControl radiusMeters={smoothingRadiusMeters} onChange={onSmoothingChange} />
+            <SmoothingControl radiusMeters={smoothingRadiusMeters} onChange={onSmoothingChange} label="Smoothing (grafico + potenza teorica):" />
           </div>
         </div>
       </div>

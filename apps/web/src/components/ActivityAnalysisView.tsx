@@ -3,6 +3,8 @@ import {
   estimateCdaFromSamples,
   estimateWindFromSamples,
   estimateTheoreticalPower,
+  smoothByDistance,
+  smoothByTime,
   bucketSamplesByTier,
   bucketSamplesByBreakpoints,
   makeUniformWindZones,
@@ -180,6 +182,11 @@ export function ActivityAnalysisView({
   const [hasPowerData, setHasPowerData] = useState(false);
   const [hoverPoint, setHoverPoint] = useState<{ lat: number; lon: number } | null>(null);
   const [smoothingRadiusMeters, setSmoothingRadiusMeters] = useState(50);
+  /** Sollevato qui (invece di restare stato interno di ActivityElevationChart, come per
+   * ogni altro chiamante) SOLO perché `theoreticalPowerSeries` sotto deve applicare la
+   * STESSA finestra a secondi già usata per potenza/velocità reali sul grafico — vedi il
+   * commento lì. */
+  const [streamSmoothingSec, setStreamSmoothingSec] = useState(0);
   const [windSpeedKmh, setWindSpeedKmh] = useState(0);
   const [windDirectionDeg, setWindDirectionDeg] = useState(0);
   const [sectionBreakpoints, setSectionBreakpoints] = useState<SectionBreakpoint[]>([]);
@@ -238,7 +245,13 @@ export function ActivityAnalysisView({
     };
   }, [display, windSpeedKmh, windDirectionDeg]);
 
-  const cdaBuilt = useMemo(() => (activityPoints ? buildCdaSamples(activityPoints) : null), [activityPoints]);
+  // Stesso raggio dello slider condiviso col grafico (non più un default fisso e
+  // scollegato) — stessa correzione già fatta per motionBuilt/potenza teorica: prima
+  // muovere lo slider non cambiava la stima CdA, solo l'aspetto del grafico.
+  const cdaBuilt = useMemo(
+    () => (activityPoints ? buildCdaSamples(activityPoints, { smoothingRadiusMeters }) : null),
+    [activityPoints, smoothingRadiusMeters]
+  );
 
   // Vento proiettato punto per punto sulla direzione di marcia reale (stessa fisica della
   // fascia vento sul grafico), non un valore scalare unico per tutta l'uscita.
@@ -273,8 +286,35 @@ export function ActivityAnalysisView({
 
   const theoreticalPowerSeries = useMemo(() => {
     if (!windedMotionSamples || windedMotionSamples.length === 0) return [];
-    return estimateTheoreticalPower(windedMotionSamples, physicsParams).map(r => ({ distKm: r.distKm, powerWatts: r.theoreticalPowerW }));
-  }, [windedMotionSamples, physicsParams]);
+    const rows = estimateTheoreticalPower(windedMotionSamples, physicsParams);
+    if (rows.length === 0) return [];
+
+    // Il termine cinetico (ΔEC/dt) resta rumoroso anche dopo lo smoothing per distanza
+    // applicato all'INGRESSO (buildMotionSamples): quello attenua il rumore sui VALORI di
+    // velocità/pendenza, ma la differenza punto-punto v1-v0 divisa per un dt corto
+    // (~1s) amplifica qualunque jitter residuo in uno spike di potenza — stesso fenomeno
+    // già documentato per il bias di Jensen sulla stima CdA, qui più evidente perché il
+    // termine cinetico non è mediato da nessuna finestra. Due passaggi sul RISULTATO,
+    // non solo uno:
+    const distancesM = rows.map(r => r.distKm * 1000);
+    const timesSec = rows.map(r => r.timeSec);
+    const rawPower = rows.map(r => r.theoreticalPowerW);
+
+    // 1) stesso raggio a METRI dello slider — coerenza di base col resto del grafico.
+    const distSmoothed = smoothByDistance(rawPower, distancesM, smoothingRadiusMeters);
+
+    // 2) stessa finestra a SECONDI già applicata a potenza/velocità REALI
+    // (streamSmoothingSec): senza questo passaggio la teorica resta "spigolosa" al
+    // confronto con una reale mediata su N secondi, indipendentemente da quanto si stringa
+    // lo smoothing a metri — un dt corto rende il termine cinetico sensibile al TEMPO
+    // trascorso, non alla distanza percorsa, quindi una finestra a metri da sola non basta
+    // a smussarlo in modo uniforme (a velocità più alta, una finestra a metri fissi copre
+    // MENO secondi, cioè MENO campioni su cui mediare — esattamente dove il termine
+    // cinetico è più sensibile). Questo era il passaggio mancante nel giro precedente.
+    const finalSmoothed = streamSmoothingSec > 0 ? smoothByTime(distSmoothed, timesSec, streamSmoothingSec) : distSmoothed;
+
+    return rows.map((r, i) => ({ distKm: r.distKm, powerWatts: finalSmoothed[i]! }));
+  }, [windedMotionSamples, physicsParams, smoothingRadiusMeters, streamSmoothingSec]);
 
   const tierResults = useMemo<BucketResult[]>(() => {
     if (!windedSamples) return [];
@@ -768,6 +808,8 @@ export function ActivityAnalysisView({
                 points={display.points}
                 smoothingRadiusMeters={smoothingRadiusMeters}
                 onSmoothingChange={setSmoothingRadiusMeters}
+                streamSmoothingSec={streamSmoothingSec}
+                onStreamSmoothingChange={setStreamSmoothingSec}
                 onHoverPoint={setHoverPoint}
                 breakpoints={sectionBreakpoints}
                 addMode={addSectionMode}
